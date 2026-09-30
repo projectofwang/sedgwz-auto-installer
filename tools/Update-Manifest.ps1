@@ -98,8 +98,8 @@ try {
         }
     }
 
-    # Write the JSON back in its canonical layout, preserving an existing
-    # optional nssm mirror so a re-run never silently drops it.
+    # Canonical JSON layout. Preserve an existing optional nssm mirror so a
+    # re-run never silently drops it.
     $d = $manifest.components.dnsproxy
     $z = $manifest.components.zapret
     $n = $manifest.components.nssm
@@ -128,8 +128,8 @@ try {
     [IO.File]::WriteAllText($manifestPath, $json, [Text.UTF8Encoding]::new($false))
     Write-Host "Wrote: $manifestPath"
 
-    # Sync the embedded fallback copy inside installer.ps1 by rebuilding the
-    # $embedded block from the manifest (nssm lines stay dynamic script refs).
+    # Rebuild the $embedded fallback block from the manifest (nssm lines stay
+    # dynamic script refs).
     $installer = Get-Content -LiteralPath $installerPath -Raw -ErrorAction Stop
     $blockMatch = [regex]::Match($installer, '(?s)(\$embedded = \[pscustomobject\]@\{.*?\r?\n        \}\r?\n    \})')
     if (-not $blockMatch.Success) { throw 'Embedded manifest block not found in installer.ps1.' }
@@ -163,7 +163,7 @@ try {
     $installer = $installer.Substring(0, $blockMatch.Index) + $newBlock + $installer.Substring($blockMatch.Index + $blockMatch.Length)
 
     if (-not [string]::IsNullOrWhiteSpace($NssmVersion)) {
-        # Embedded nssm resolves through these script variables: update them.
+        # Embedded nssm resolves through script variables: update them too.
         $oldVer = [regex]::Match($installer, "(?m)^`$script:NssmVersion = '([^']+)'\r?$")
         $oldHash = [regex]::Match($installer, "(?m)^`$script:NssmSha256 = '([^']+)'\r?$")
         $oldUrl = [regex]::Match($installer, "(?m)^\s*NssmZip\s+= '([^']+)'\r?$")
