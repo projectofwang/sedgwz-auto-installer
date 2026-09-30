@@ -19,6 +19,20 @@ SHA-256; `_headers` applies `no-store` and security headers (assets-only
 deploy, no Worker script). GitHub Actions runs checks only — no deploys, no
 `CLOUDFLARE_API_TOKEN` secret.
 
+## Deploy alternative: `cf` (experimental)
+
+Prerequisites: `npm install` at the repo root **and** in `cloudflare/`,
+plus `cf auth login`. Because `cf` beta cannot spawn its Wrangler
+delegate on Windows (`spawn EFTYPE`), the build step calls the delegate
+directly through `node`:
+
+- Build: `npm run build:cf`
+- Dry run: `npm run deploy:cf:dry`
+- Deploy: `npm run deploy:cf`
+
+When upstream `cf` fixes the Windows spawn, replace the delegate call
+with plain `cf build`.
+
 ## Files
 
 `/` (landing page with install command, from `landing.html`) ·

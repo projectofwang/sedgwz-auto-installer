@@ -5,6 +5,9 @@
   },
   "scripts": {
     "build:cloudflare": "bash cloudflare/build.sh",
-    "deploy": "wrangler deploy --config cloudflare/wrangler.toml"
+    "deploy": "wrangler deploy --config cloudflare/wrangler.toml",
+    "build:cf": "bash cloudflare/build.sh && cd cloudflare && node node_modules/wrangler/bin/cf-wrangler.js build",
+    "deploy:cf:dry": "cd cloudflare && cf deploy --prebuilt --dry-run",
+    "deploy:cf": "npm run build:cf && cd cloudflare && cf deploy --prebuilt"
   }
 }
