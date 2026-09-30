@@ -11,6 +11,12 @@ cp installer.ps1 cloudflare/public/installer.ps1
 cp approved-releases.json cloudflare/public/approved-releases.json
 cp cloudflare/landing.html cloudflare/public/index.html
 
+# Deterministic line endings: checkouts differ by platform (CRLF on Windows,
+# LF elsewhere) and both installer.ps1 and approved-releases.json are hashed
+# into version.json/SHA256SUMS. Normalize the staged copies to CRLF so the
+# Cloudflare origin always matches the GitHub Release origin.
+node -e "for (const f of ['cloudflare/public/installer.ps1','cloudflare/public/approved-releases.json']) { const fs = require('fs'); const t = fs.readFileSync(f,'utf8').replace(/\r\n/g,'\n').replace(/\n/g,'\r\n'); fs.writeFileSync(f,t); }"
+
 # Static headers: assets-only deploy, so no-store/security headers must
 # come from a _headers file instead of a Worker.
 cat > cloudflare/public/_headers <<'HEADERS_EOF'
