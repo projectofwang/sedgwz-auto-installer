@@ -2,7 +2,7 @@ import { defineConfig, triggers } from "cf/config";
 
 export default defineConfig({
 	worker: {
-		name: "doh-dns-download",
+		name: "sedg-with-zapret-dpi-bypass-auto-installer",
 		compatibilityDate: "2026-09-27",
 		triggers: [
 			triggers.fetch({
