@@ -272,8 +272,9 @@ Describe 'Boot resilience (no network after reboot)' {
         $src | Should -Match "DnsProxyPath /grant '\*S-1-5-19:\(OI\)\(CI\)M'"
     }
     It 'installer version matches approved-releases.json' {
-        $src = Get-Content -LiteralPath $global:SEDGInstallerPath -Raw
-        $instVer = ([regex]::Match($src, "(?m)^\$script:InstallerVersion = '([^']+)'")).Groups[1].Value
+        # Same extraction as ci.yml (avoids $-expansion pitfalls in patterns).
+        $line = (Select-String -LiteralPath $global:SEDGInstallerPath -Pattern "InstallerVersion = '" | Select-Object -First 1).Line
+        $instVer = ($line -replace "^.*'([^']+)'.*", '$1').Trim()
         $manifest = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $global:SEDGInstallerPath) 'approved-releases.json') -Raw | ConvertFrom-Json
         ([string]$manifest.installer.version) | Should -Be $instVer
     }
