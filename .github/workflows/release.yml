@@ -1,0 +1,58 @@
+name: release
+
+# H6: publish installer.ps1 + SHA256SUMS to GitHub Releases on every version
+# tag (vX.Y.Z). Releases are a second origin, so users can cross-check the
+# Cloudflare hash against GitHub before running the installer.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to (re)publish, e.g. v1.4.1'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build Cloudflare assets (Git Bash)
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash cloudflare/build.sh
+
+      - name: Publish GitHub Release (second origin for hash cross-check)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = '${{ inputs.tag }}'
+          if ([string]::IsNullOrWhiteSpace($tag)) { $tag = '${{ github.ref_name }}' }
+          if ($tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw "ref '$tag' is not a version tag (expected vX.Y.Z)" }
+          $ver = (Get-Content -LiteralPath cloudflare/public/version.json -Raw | ConvertFrom-Json).version
+          if ("v$ver" -ne $tag) { throw "tag $tag does not match installer version v$ver" }
+          $assets = @(
+            'cloudflare/public/installer.ps1',
+            'cloudflare/public/approved-releases.json',
+            'cloudflare/public/SHA256SUMS',
+            'cloudflare/public/version.json'
+          )
+          foreach ($a in $assets) {
+            if (-not (Test-Path -LiteralPath $a -PathType Leaf)) { throw "missing build asset: $a" }
+          }
+          $exists = $true
+          try {
+            gh release view $tag --json tagName --jq .tagName 2>$null | Out-Null
+            if ($LASTEXITCODE -ne 0) { $exists = $false }
+          } catch { $exists = $false }
+          # Tags are immutable (ruleset immutable-release-tags): never
+          # overwrite an existing release, fail loudly instead.
+          if ($exists) { throw "release $tag already exists; tags are immutable, bump the version instead" }
+          else { gh release create $tag --title $tag --generate-notes --latest $assets }
