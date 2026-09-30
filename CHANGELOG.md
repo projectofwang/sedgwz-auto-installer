@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.2
+
+- Fix no-network after reboot: DNS adapters keep pointing at `127.0.0.1`
+  while `dnsproxy-service` stayed `Stopped`.
+- Harden boot: grant LocalService traverse on the install dir, set NSSM
+  `AppExit Default Restart` plus SCM failure actions (`restart/5000/...`),
+  watchdog self-heals stopped auto-start services (respects `-DnsOnly`),
+  task runs AtStartup plus every 1 minute.
+- Existing installs pick the fix up via Update (recreates services/task).
+
 ## 1.0.1
 
 - Docs and cleanup, no behavior change: rewrote `README.md` and

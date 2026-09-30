@@ -248,3 +248,42 @@ Describe 'Language tables' {
         $missing.Count | Should -Be 0
     }
 }
+
+Describe 'Boot resilience (no network after reboot)' {
+    It 'watchdog self-heals stopped auto-start services' {
+        $src = Get-Content -LiteralPath $global:SEDGInstallerPath -Raw
+        $src | Should -Match 'Start-Service -Name \$svcName'
+        $src | Should -Match "StartType -eq 'Automatic'"
+    }
+    It 'watchdog runs at startup plus 1-minute repetition' {
+        $src = Get-Content -LiteralPath $global:SEDGInstallerPath -Raw
+        $src | Should -Match 'New-ScheduledTaskTrigger -AtStartup'
+        $src | Should -Match 'RepetitionInterval \(New-TimeSpan -Minutes 1\)'
+    }
+    It 'services restart on early exit (NSSM + SCM recovery)' {
+        $src = Get-Content -LiteralPath $global:SEDGInstallerPath -Raw
+        $src | Should -Match "AppExit', 'Default', 'Restart'"
+        $src | Should -Match 'sc\.exe failure \$svcName'
+        $src | Should -Match 'sc\.exe failureflag \$svcName 1'
+    }
+    It 'LocalService can traverse the admin-only install dir' {
+        $src = Get-Content -LiteralPath $global:SEDGInstallerPath -Raw
+        $src | Should -Match "InstallPath /grant '\*S-1-5-19:\(OI\)\(CI\)RX'"
+        $src | Should -Match "DnsProxyPath /grant '\*S-1-5-19:\(OI\)\(CI\)M'"
+    }
+    It 'installer version matches approved-releases.json' {
+        $src = Get-Content -LiteralPath $global:SEDGInstallerPath -Raw
+        $instVer = ([regex]::Match($src, "(?m)^\$script:InstallerVersion = '([^']+)'")).Groups[1].Value
+        $manifest = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $global:SEDGInstallerPath) 'approved-releases.json') -Raw | ConvertFrom-Json
+        ([string]$manifest.installer.version) | Should -Be $instVer
+    }
+    It 'generated watchdog template parses cleanly' {
+        $src = Get-Content -LiteralPath $global:SEDGInstallerPath -Raw
+        $m = [regex]::Match($src, "(?s)function Write-WatchdogFile \{.*?\$template = @'(.*?)'@")
+        $m.Success | Should -Be $true
+        $gen = $m.Groups[1].Value.Replace('%%INSTALLPATH%%', 'C:\serverless-edge-dns-gateway')
+        $toks = $null; $errs = $null
+        [void][System.Management.Automation.Language.Parser]::ParseInput($gen, [ref]$toks, [ref]$errs)
+        $errs.Count | Should -Be 0
+    }
+}
