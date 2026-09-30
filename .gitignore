@@ -1,6 +1,7 @@
 node_modules/
 cloudflare/public/
 cloudflare/.wrangler/
+cloudflare/.cloudflare/
 *.log
 .DS_Store
 Thumbs.db
