@@ -2,6 +2,8 @@ node_modules/
 cloudflare/public/
 cloudflare/.wrangler/
 cloudflare/.cloudflare/
+# Nested worker package lock: local-only cf flow, no automation consumes it.
+cloudflare/package-lock.json
 *.log
 .DS_Store
 Thumbs.db
