@@ -10,7 +10,8 @@ pinned upstream sources.
 Push to `main` auto-builds via the dashboard Git integration:
 
 - Build: `bash cloudflare/build.sh` (`npm run build:cloudflare`)
-- Deploy: `npm run deploy`
+- Deploy: `npm run deploy:cf` (primary, `cf` CLI)
+- Fallback: `npm run deploy` (Wrangler; keep `wrangler.toml` for it)
 - Root directory: `/`, branch: `main`
 
 The build rejects installer/manifest version mismatch, then emits
@@ -19,14 +20,12 @@ SHA-256; `_headers` applies `no-store` and security headers (assets-only
 deploy, no Worker script). GitHub Actions runs checks only — no deploys, no
 `CLOUDFLARE_API_TOKEN` secret.
 
-## Deploy alternative: `cf` (experimental)
-
 Prerequisites: `npm install` at the repo root **and** in `cloudflare/`,
-plus `cf auth login`. Because `cf` beta cannot spawn its Wrangler
-delegate on Windows (`spawn EFTYPE`), the build step calls the delegate
-directly through `node`:
+plus `cf auth login` for real deploys (dry runs need no sign-in).
+Because `cf` beta cannot spawn its Wrangler delegate on Windows
+(`spawn EFTYPE`), the build step calls the delegate directly through
+`node`:
 
-- Build: `npm run build:cf`
 - Dry run: `npm run deploy:cf:dry`
 - Deploy: `npm run deploy:cf`
 

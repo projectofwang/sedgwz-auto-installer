@@ -104,3 +104,27 @@ jobs:
           test -f cloudflare/public/_headers
           test -f cloudflare/public/SHA256SUMS
           node -e "v=require('./cloudflare/public/version.json'); if(!v.version||!v.commit||!v.sha256||!v.built) throw new Error('bad version.json')"
+
+  cf-path:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+
+      - name: Install dependencies (root + worker package)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm install --no-audit --no-fund
+          Set-Location cloudflare
+          npm install --no-audit --no-fund
+
+      - name: cf build + deploy dry-run (no sign-in required)
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build:cf
+          npm run deploy:cf:dry
