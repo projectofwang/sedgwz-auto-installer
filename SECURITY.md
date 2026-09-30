@@ -4,8 +4,8 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 1.4.x   | :white_check_mark: |
-| < 1.4.0 | :x:                |
+| 1.0.x   | :white_check_mark: |
+| < 1.0.0 | :x:                |
 
 Older managers self-update to the current release on Update/Install when
 online; always update before reporting an issue.
@@ -18,8 +18,8 @@ online; always update before reporting an issue.
 - Component binaries are pinned by SHA-256 in `approved-releases.json`.
 - Manifest content is trusted via HTTPS plus the installer/manifest version
   match. Anyone able to push to `main` or publish the Cloudflare deployment
-  can change which binaries users install: keep branch protection with
-  required reviews on, and 2FA on the Cloudflare account.
+  can change which binaries users install: `main` blocks force-pushes, `v*`
+  tags are immutable, and the Cloudflare account needs 2FA.
 
 ## Reporting a vulnerability
 
