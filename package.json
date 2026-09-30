@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "devDependencies": {
+    "wrangler": "4.144.0"
+  },
+  "scripts": {
+    "build:cloudflare": "bash cloudflare/build.sh",
+    "deploy": "wrangler deploy --config cloudflare/wrangler.toml"
+  }
+}

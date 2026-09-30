@@ -1,0 +1,106 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Parse all PowerShell files (Windows PowerShell 5.1)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = Get-ChildItem -Recurse -Include '*.ps1' -File |
+            Where-Object { $_.FullName -notmatch 'node_modules' }
+          foreach ($f in $files) {
+            $parseErrors = $null
+            [void][System.Management.Automation.PSParser]::Tokenize((Get-Content -LiteralPath $f.FullName -Raw), [ref]$parseErrors)
+            if (@($parseErrors).Count -gt 0) { throw "$($f.FullName): $($parseErrors.Count) syntax errors" }
+          }
+          Write-Host "Parsed $($files.Count) files, 0 errors"
+
+      - name: installer.ps1 must stay pure ASCII
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $n = ([regex]::Matches((Get-Content -LiteralPath installer.ps1 -Raw), '[^\x00-\x7F]')).Count
+          if ($n -ne 0) { throw "installer.ps1 has $n non-ASCII chars" }
+
+      - name: PSScriptAnalyzer (errors only)
+        shell: powershell
+        run: |
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser -ErrorAction Stop
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
+          if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer)) {
+            Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -SkipPublisherCheck -ErrorAction Stop
+          }
+          $r = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error -ExcludeRule PSAvoidUsingWriteHost
+          $r | Format-Table -AutoSize | Out-String | Write-Host
+          if (@($r).Count -gt 0) { throw "PSScriptAnalyzer found $($r.Count) error(s)" }
+
+      - name: Pester logic tests (Pester 5+)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version -ge [version]'5.2.0' })) {
+            Install-Module Pester -MinimumVersion 5.2.0 -Force -Scope CurrentUser -SkipPublisherCheck -ErrorAction Stop
+          }
+          Import-Module Pester -MinimumVersion 5.2.0 -Force -ErrorAction Stop
+          Invoke-Pester -Path ./tests -Output Detailed -CI
+
+      - name: Manifest schema + version parity + embedded parity
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $m = Get-Content -LiteralPath approved-releases.json -Raw | ConvertFrom-Json
+          if ($m.schema -ne 1 -or $m.policy -ne 'approved-only') { throw 'bad schema/policy' }
+          foreach ($c in @($m.components.dnsproxy, $m.components.zapret)) {
+            if ([string]::IsNullOrWhiteSpace($c.tag) -or [string]::IsNullOrWhiteSpace($c.asset) -or $c.sha256 -notmatch '^[0-9a-f]{64}$') { throw 'bad component entry' }
+          }
+          if ($m.components.nssm.sha256 -notmatch '^[0-9a-f]{64}$') { throw 'bad nssm entry' }
+          if ([string]$m.components.nssm.url -notmatch '^https://') { throw 'nssm url must be https' }
+          $line = (Select-String -LiteralPath installer.ps1 -Pattern "InstallerVersion = '" | Select-Object -First 1).Line
+          $iv = ($line -replace "^.*'([^']+)'.*", '$1').Trim()
+          if ($iv -ne [string]$m.installer.version) { throw "version mismatch: $iv vs $($m.installer.version)" }
+          $src = Get-Content -LiteralPath installer.ps1 -Raw
+          foreach ($tag in @($m.components.dnsproxy.tag, $m.components.zapret.tag)) {
+            if ($src -notmatch [regex]::Escape([string]$tag)) { throw "embedded manifest missing tag $tag" }
+          }
+          foreach ($h in @($m.components.dnsproxy.sha256, $m.components.zapret.sha256)) {
+            if ($src -notmatch [regex]::Escape([string]$h)) { throw "embedded manifest missing hash $h" }
+          }
+
+      - name: EN/VI language parity
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $src = Get-Content -LiteralPath installer.ps1 -Raw
+          $en = ([regex]::Match($src, '(?s)EN = @\{(.*?)\n  \}')).Groups[1].Value
+          $vi = ([regex]::Match($src, '(?s)VI = @\{(.*?)\n  \}')).Groups[1].Value
+          $enKeys = [regex]::Matches($en, "([A-Za-z0-9]+)='") | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
+          $viKeys = [regex]::Matches($vi, "([A-Za-z0-9]+)='") | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
+          $d = Compare-Object $enKeys $viKeys
+          if ($d) { throw ("key drift: " + ($d -join ', ')) }
+
+      - name: Cloudflare build (Git Bash) + outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash cloudflare/build.sh
+          test -f cloudflare/public/installer.ps1
+          test -f cloudflare/public/approved-releases.json
+          test -f cloudflare/public/version.json
+          test -f cloudflare/public/index.html
+          test -f cloudflare/public/_headers
+          test -f cloudflare/public/SHA256SUMS
+          node -e "v=require('./cloudflare/public/version.json'); if(!v.version||!v.commit||!v.sha256||!v.built) throw new Error('bad version.json')"

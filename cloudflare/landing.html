@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Serverless Edge DNS Gateway + Zapret — Install</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: #0b0e14; color: #e6e9f0; font-family: Consolas, "Cascadia Code", Menlo, monospace;
+    padding: 24px;
+  }
+  .card {
+    width: 100%; max-width: 640px; background: #11151d; border: 1px solid #232a38;
+    border-radius: 12px; padding: 28px 28px 24px; box-shadow: 0 8px 40px rgba(0,0,0,.45);
+  }
+  .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+  h1 { font-size: 20px; margin: 0 0 4px; color: #7dd3fc; }
+  .sub { color: #8b94a7; font-size: 13px; margin-bottom: 20px; }
+  .badge {
+    display: inline-block; font-size: 12px; color: #a7f3d0; background: #052e22;
+    border: 1px solid #0d5c43; border-radius: 999px; padding: 3px 12px; margin-bottom: 18px;
+  }
+  .lang { display: flex; gap: 6px; flex-shrink: 0; }
+  .lang button {
+    cursor: pointer; border: 1px solid #232a38; background: #0b0e14; color: #8b94a7;
+    border-radius: 6px; padding: 4px 10px; font: inherit; font-size: 12px;
+  }
+  .lang button.active { border-color: #1d4ed8; background: #1e40af; color: #fff; }
+  label { display: block; font-size: 12px; color: #8b94a7; margin: 16px 0 6px; text-transform: uppercase; letter-spacing: .06em; }
+  .cmd {
+    display: flex; gap: 8px; align-items: stretch;
+    background: #0b0e14; border: 1px solid #232a38; border-radius: 8px; padding: 10px 12px;
+  }
+  .cmd code { flex: 1; overflow-x: auto; white-space: nowrap; font-size: 13px; color: #f0f3f9; align-self: center; }
+  button.copy {
+    cursor: pointer; border: 1px solid #1d4ed8; background: #1e40af; color: #fff;
+    border-radius: 6px; padding: 6px 14px; font: inherit; font-size: 13px;
+  }
+  button.copy:hover { background: #1d4ed8; }
+  .files { margin-top: 6px; font-size: 13px; }
+  .files a { color: #7dd3fc; text-decoration: none; margin-right: 16px; }
+  .files a:hover { text-decoration: underline; }
+  .hash { font-size: 11px; color: #667085; word-break: break-all; margin-top: 14px; }
+  .foot { margin-top: 18px; font-size: 12px; color: #667085; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="top">
+      <h1>Serverless Edge DNS Gateway + Zapret</h1>
+      <div class="lang">
+        <button id="lang-en" type="button">EN</button>
+        <button id="lang-vi" type="button">VI</button>
+      </div>
+    </div>
+    <div class="sub" data-en="Local DoH proxy (127.0.0.1) with DPI bypass — Windows auto installer" data-vi="Proxy DoH nội bộ (127.0.0.1) vượt DPI — Trình cài tự động cho Windows">Local DoH proxy (127.0.0.1) with DPI bypass — Windows auto installer</div>
+    <div class="badge" id="ver">version: loading…</div>
+
+    <label data-en="Run in PowerShell as Administrator" data-vi="Chạy trong PowerShell với quyền Administrator">Run in PowerShell as Administrator</label>
+    <div class="cmd">
+      <code id="cmd">irm https://dl.taiyuanwangjie.dpdns.org/installer.ps1 | iex</code>
+      <button id="copy" class="copy" type="button" data-en="Copy" data-vi="Sao chép">Copy</button>
+    </div>
+
+    <label data-en="Verify in 3 steps before running (optional)" data-vi="Kiểm tra 3 bước trước khi chạy (tùy chọn)">Verify in 3 steps before running (optional)</label>
+    <div class="cmd">
+      <code id="cmd2">Invoke-WebRequest https://dl.taiyuanwangjie.dpdns.org/installer.ps1 -OutFile installer.ps1 -UseBasicParsing</code>
+      <button id="copy2" class="copy" type="button" data-en="Copy" data-vi="Sao chép">Copy</button>
+    </div>
+    <div class="cmd" style="margin-top:8px">
+      <code id="cmd3">$v = Invoke-RestMethod https://dl.taiyuanwangjie.dpdns.org/version.json; if ((Get-FileHash installer.ps1 -Algorithm SHA256).Hash.ToLower() -ne $v.sha256) { throw 'SHA-256 mismatch' } 'hash OK: ' + $v.version</code>
+      <button id="copy3" class="copy" type="button" data-en="Copy" data-vi="Sao chép">Copy</button>
+    </div>
+    <div class="cmd" style="margin-top:8px">
+      <code id="cmd4">powershell -NoProfile -ExecutionPolicy Bypass -File .\installer.ps1</code>
+      <button id="copy4" class="copy" type="button" data-en="Copy" data-vi="Sao chép">Copy</button>
+    </div>
+    <div class="hash" id="cross">Cross-check: compare the hash above with <a style="color:#7dd3fc" href="https://github.com/projectofwang/sedgwz-auto-installer/releases/latest/download/SHA256SUMS">GitHub Releases SHA256SUMS</a> (different origin) before running.</div>
+
+    <label data-en="Published files" data-vi="Tệp đã xuất bản">Published files</label>
+    <div class="files">
+      <a href="/installer.ps1">installer.ps1</a>
+      <a href="/approved-releases.json">approved-releases.json</a>
+      <a href="/version.json">version.json</a>
+      <a href="/SHA256SUMS">SHA256SUMS</a>
+    </div>
+
+    <div class="hash" id="sha"></div>
+    <div class="foot" data-en="Thanks to BIBICADOTNET for the original script and concept." data-vi="Cảm ơn BIBICADOTNET vì script và ý tưởng gốc.">Thanks to BIBICADOTNET for the original script and concept.</div>
+  </div>
+
+<script>
+(function () {
+  var STR = {
+    en: { loading: 'version: loading…', unavailable: 'version: unavailable', copied: 'Copied' },
+    vi: { loading: 'phiên bản: đang tải…', unavailable: 'phiên bản: không khả dụng', copied: 'Đã chép' }
+  };
+  var lang = 'en';
+  try { lang = localStorage.getItem('sedg-lang') || 'en'; } catch (e) {}
+  if (lang !== 'vi') { lang = 'en'; }
+  var meta = null;
+
+  function t(key) { return STR[lang][key]; }
+
+  function applyLang() {
+    document.documentElement.lang = lang;
+    var els = document.querySelectorAll('[data-en]');
+    for (var i = 0; i < els.length; i++) {
+      var v = els[i].getAttribute(lang === 'vi' ? 'data-vi' : 'data-en');
+      if (v !== null) { els[i].textContent = v; }
+    }
+    document.getElementById('lang-en').className = lang === 'en' ? 'active' : '';
+    document.getElementById('lang-vi').className = lang === 'vi' ? 'active' : '';
+    renderVer();
+  }
+
+  function renderVer() {
+    var el = document.getElementById('ver');
+    if (!meta) { el.textContent = t('loading'); return; }
+    var label = lang === 'vi' ? 'phiên bản: ' : 'version: ';
+    el.textContent = label + meta.version + '  ·  ' + String(meta.commit).slice(0, 7);
+  }
+
+  function setLang(l) {
+    lang = l === 'vi' ? 'vi' : 'en';
+    try { localStorage.setItem('sedg-lang', lang); } catch (e) {}
+    var btns = document.querySelectorAll('button.copy');
+    for (var i = 0; i < btns.length; i++) {
+      if (btns[i].textContent !== 'Copy' && btns[i].textContent !== 'Sao chép' &&
+          btns[i].textContent !== 'Copied' && btns[i].textContent !== 'Đã chép') { continue; }
+      var v = btns[i].getAttribute(lang === 'vi' ? 'data-vi' : 'data-en');
+      if (v !== null) { btns[i].textContent = v; }
+    }
+    applyLang();
+  }
+
+  function copy(id, btn) {
+    var txt = document.getElementById(id).textContent;
+    function done() {
+      btn.textContent = t('copied');
+      setTimeout(function () {
+        var v = btn.getAttribute(lang === 'vi' ? 'data-vi' : 'data-en');
+        btn.textContent = v !== null ? v : txt;
+      }, 1500);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(txt).then(done, function () { fallback(); });
+    } else { fallback(); }
+    function fallback() {
+      var ta = document.createElement('textarea');
+      ta.value = txt; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); done(); } catch (e) {}
+      document.body.removeChild(ta);
+    }
+  }
+  document.getElementById('copy').onclick = function () { copy('cmd', this); };
+  document.getElementById('copy2').onclick = function () { copy('cmd2', this); };
+  document.getElementById('copy3').onclick = function () { copy('cmd3', this); };
+  document.getElementById('copy4').onclick = function () { copy('cmd4', this); };
+  document.getElementById('lang-en').onclick = function () { setLang('en'); };
+  document.getElementById('lang-vi').onclick = function () { setLang('vi'); };
+  fetch('/version.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (v) {
+    meta = v;
+    document.getElementById('sha').textContent = 'sha256: ' + v.sha256;
+    renderVer();
+  }).catch(function () {
+    document.getElementById('ver').textContent = t('unavailable');
+  });
+  applyLang();
+})();
+</script>
+</body>
+</html>
