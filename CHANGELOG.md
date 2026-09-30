@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.4
+
+- Update now always refreshes `state.json`, even when binaries are
+  already current (previously a skipped commit left a stale
+  `InstallerVersion`, making a successful Update look like it never ran).
+
 ## 1.0.3
 
 - Kill the remaining 1-2 minute outage after boot: dnsproxy now starts

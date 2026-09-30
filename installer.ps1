@@ -62,7 +62,7 @@ try {
     }
 } catch { $script:SelfContent = $null }
 
-$script:InstallerVersion = '1.0.3'
+$script:InstallerVersion = '1.0.4'
 $script:InstallPath = 'C:\serverless-edge-dns-gateway'
 $script:ObsoleteInstallPaths = @(
     'C:\dns-doh',
@@ -2791,7 +2791,12 @@ function Update-All {
         Clear-WatchdogState
         Start-AllServices
         Set-LocalDns
-        if ($staged) { Write-State $staged.DnsRelease $staged.ZapRelease }
+        # Always refresh state (even when binaries were already current):
+        # a skipped commit must still record the running InstallerVersion,
+        # otherwise state.json goes stale and looks like Update never ran.
+        $finalRel = Get-StateReleases
+        if ($staged) { $finalRel = @($staged.DnsRelease, $staged.ZapRelease) }
+        Write-State $finalRel[0] $finalRel[1]
         Remove-Item -LiteralPath $script:TempPath -Recurse -Force -ErrorAction SilentlyContinue
         Write-Host ''
         Write-Host (T 'UpdDone') -ForegroundColor Green

@@ -275,6 +275,11 @@ Describe 'Boot resilience (no network after reboot)' {
         $src | Should -Match "InstallPath /grant '\*S-1-5-19:\(OI\)\(CI\)RX'"
         $src | Should -Match "DnsProxyPath /grant '\*S-1-5-19:\(OI\)\(CI\)M'"
     }
+    It 'update always refreshes state, even on skipped commit' {
+        $src = Get-Content -LiteralPath $global:SEDGInstallerPath -Raw
+        $src | Should -Not -Match 'if \(\$staged\) \{ Write-State'
+        $src | Should -Match 'Always refresh state'
+    }
     It 'installer version matches approved-releases.json' {
         # Same extraction as ci.yml (avoids $-expansion pitfalls in patterns).
         $line = (Select-String -LiteralPath $global:SEDGInstallerPath -Pattern "InstallerVersion = '" | Select-Object -First 1).Line
