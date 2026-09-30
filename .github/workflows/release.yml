@@ -1,15 +1,15 @@
 name: release
 
-# H6: publish installer.ps1 + SHA256SUMS to GitHub Releases on every version
-# tag (vX.Y.Z). Releases are a second origin, so users can cross-check the
-# Cloudflare hash against GitHub before running the installer.
+# Publish installer.ps1 + SHA256SUMS to GitHub Releases on every version tag.
+# Releases are a second origin, so users can cross-check the Cloudflare hash
+# against GitHub before running the installer.
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to (re)publish, e.g. v1.4.1'
+        description: 'Tag to (re)publish, e.g. v1.0.1'
         required: true
 
 permissions:

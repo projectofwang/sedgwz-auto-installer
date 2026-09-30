@@ -33,8 +33,8 @@ cat > cloudflare/public/_headers <<'HEADERS_EOF'
 HEADERS_EOF
 
 installer_version="$(sed -n "s/^\$script:InstallerVersion = '\([^']*\)'.*/\1/p" installer.ps1 | head -n1)"
-# Parse JSON with node (always present where wrangler runs) instead of a
-# fragile first-"version"-match: approved-releases.json also contains the NSSM version.
+# Parse JSON with node (always present where wrangler runs); a naive
+# first-"version"-match would catch the NSSM version instead.
 manifest_version="$(node -p "require('./approved-releases.json').installer.version")"
 
 if [[ -z "$installer_version" || -z "$manifest_version" ]]; then
@@ -53,7 +53,7 @@ built="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 printf '{"version":"%s","commit":"%s","sha256":"%s","built":"%s"}\n'   "$installer_version" "$commit" "$sha256" "$built" > cloudflare/public/version.json
 
-# H6: cross-origin check file so users can compare Cloudflare vs GitHub.
+# Cross-origin check file: compare Cloudflare vs GitHub.
 {
   echo "# SHA256SUMS for v$installer_version ($commit)"
   echo "$sha256  installer.ps1"

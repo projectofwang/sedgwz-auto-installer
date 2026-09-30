@@ -18,14 +18,14 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# Save host preferences so irm|iex never pollutes the caller session (M5).
+# Restore these in `finally` so irm|iex never pollutes the caller session.
 $script:SavedErrorAction = $ErrorActionPreference
 $script:SavedProgress = $ProgressPreference
 try { $script:SavedSecurityProtocol = [Net.ServicePointManager]::SecurityProtocol } catch { $script:SavedSecurityProtocol = $null }
 try { $script:SavedOutputEncoding = [Console]::OutputEncoding } catch { $script:SavedOutputEncoding = $null }
 
-# Quiet progress bars (PS 5.1 downloads/expands slowly otherwise) and modern
-# TLS everywhere. 12288 is the TLS 1.3 flag, missing on old .NET (then TLS 1.2).
+# Quiet progress (slow on PS 5.1) and modern TLS. 12288 is the TLS 1.3
+# flag, absent on old .NET (then TLS 1.2).
 $ProgressPreference = 'SilentlyContinue'
 try {
     [Net.ServicePointManager]::SecurityProtocol = ([Net.SecurityProtocolType]::Tls12 -bor 12288)
@@ -43,11 +43,9 @@ try {
 
 $script:ManifestCache = $null
 
-# Works both as a normal .ps1 file and when piped through Invoke-Expression (irm ... | iex).
-# NOTE: under iex, $MyInvocation.MyCommand.Definition is only a stub snippet,
-# not the script, so it must never be used as source material. Elevation and
-# manager installation re-fetch hash-verified copies instead (see
-# Ensure-Administrator / Get-ManagerSourceContent).
+# Also runs via irm|iex. There $MyInvocation is only a stub snippet, never
+# source material: elevation and manager install re-fetch hash-verified
+# copies (see Ensure-Administrator / Get-ManagerSourceContent).
 $script:SelfPath = $PSCommandPath
 if ([string]::IsNullOrWhiteSpace($script:SelfPath)) {
     # irm ... | iex has no stable script path. Use a fresh temporary path so
@@ -55,8 +53,8 @@ if ([string]::IsNullOrWhiteSpace($script:SelfPath)) {
     $tempInstallerName = 'serverless-edge-dns-gateway-installer-{0}.ps1' -f ([guid]::NewGuid().ToString('N'))
     $script:SelfPath = Join-Path $env:TEMP $tempInstallerName
 }
-# In-memory copy captured before any wipe so Write-Manager can restore
-# manager.ps1 even when the running file itself was deleted (H5).
+# In-memory copy taken before any wipe, so Write-Manager can restore
+# manager.ps1 even when the running file was deleted.
 $script:SelfContent = $null
 try {
     if (Test-Path -LiteralPath $script:SelfPath -PathType Leaf) {
@@ -64,7 +62,7 @@ try {
     }
 } catch { $script:SelfContent = $null }
 
-$script:InstallerVersion = '1.0.0'
+$script:InstallerVersion = '1.0.1'
 $script:InstallPath = 'C:\serverless-edge-dns-gateway'
 $script:ObsoleteInstallPaths = @(
     'C:\dns-doh',
@@ -304,10 +302,8 @@ $script:Texts = @{
   }
 }
 
-# Table values above use \uXXXX escapes so this file stays pure ASCII.
-# PowerShell 5.1 decodes BOM-less scripts with the system codepage, which
-# would corrupt raw UTF-8 (e.g. U+0111 decodes to a smart quote and
-# breaks parsing). Decode the escapes once at load time.
+# Tables above use \uXXXX escapes to stay pure ASCII: PS 5.1 decodes BOM-less
+# scripts with the system codepage, corrupting raw UTF-8. Decoded once at load.
 foreach ($table in @($script:Texts['EN'], $script:Texts['VI'])) {
     foreach ($k in @($table.Keys)) {
         $table[$k] = [System.Text.RegularExpressions.Regex]::Unescape($table[$k])
@@ -493,8 +489,8 @@ function Ensure-Administrator {
     if (-not (Test-Path -LiteralPath $script:SelfPath -PathType Leaf)) {
         throw 'Administrator rights are required. Open PowerShell as Administrator and run the install command again.'
     }
-    # Quote paths: PS 5.1 Start-Process does not quote ArgumentList elements,
-    # so TEMP paths under usernames with spaces would break elevation (M1).
+    # PS 5.1 Start-Process does not quote ArgumentList elements, so quote
+    # paths here (TEMP under usernames with spaces would break elevation).
     $elevArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $script:SelfPath + '"'), '-Action', $Action)
     if (-not [string]::IsNullOrWhiteSpace($Upstream)) {
         # Strip quotes (never valid in a URL) so the value cannot break out
@@ -640,7 +636,7 @@ function Assert-ManifestComponents($Manifest) {
 }
 
 function Get-ReleaseAssetUrl([string]$Repository, [string]$Tag, [string]$Asset) {
-    # Direct release download (M5): no unauthenticated GitHub API calls, so no
+    # Direct release download: no unauthenticated GitHub API calls, so no
     # 60 req/hour rate-limit failures behind shared IPs (CGNAT).
     if ($script:AllowedReleaseRepos -notcontains $Repository) {
         throw "Release repository is not allow-listed: $Repository"
@@ -809,8 +805,8 @@ function Get-NetworkAdapters([switch]$IncludeVirtual) {
     $adapters = @(Get-NetAdapter -ErrorAction SilentlyContinue |
         Where-Object { $_.Status -eq 'Up' -and $_.InterfaceDescription -notlike '*Loopback*' })
     if (-not $IncludeVirtual) {
-        # Default to physical adapters only (M2): virtual/VPN adapters keep
-        # their own DNS unless the caller explicitly opts in.
+        # Physical adapters only by default; virtual/VPN keep their own DNS
+        # unless the caller explicitly opts in.
         $physical = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue |
             Where-Object { $_.Status -eq 'Up' } |
             Select-Object -ExpandProperty ifIndex)
@@ -953,7 +949,7 @@ namespace DnsDohInstaller {    public static class NativeMethods {        [DllIm
 
 function Schedule-DeleteTreeOnReboot([string]$Path) {
     # MoveFileEx deletes files only: schedule children before parents
-    # (deepest first) so a whole install tree is gone after reboot (M9).
+    # (deepest first) so a whole install tree is gone after reboot.
     if (-not (Test-Path -LiteralPath $Path)) { return }
     try {
         $entries = @(Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue)
@@ -1030,11 +1026,9 @@ function Start-AllServices {
 }
 
 function Set-AdapterDnsFamily([string]$AdapterName, [ValidateSet('IPv4','IPv6')][string]$AddressFamily, [string[]]$ServerAddresses, [switch]$Dhcp) {
-    # Set-DnsClientServerAddress has no AddressFamily parameter. For static
-    # DNS, pass only addresses from the requested family; Windows applies
-    # those addresses to the interface DNS configuration. For DHCP/reset,
-    # use the protocol-specific netsh context so IPv4 and IPv6 remain
-    # independently restorable.
+    # Set-DnsClientServerAddress has no AddressFamily switch: pass only the
+    # requested family's addresses for static DNS; use per-protocol netsh
+    # contexts for DHCP so families stay independently restorable.
     $adapter = Get-NetAdapter -Name $AdapterName -ErrorAction Stop
     $interfaceIndex = [int]$adapter.ifIndex
     $family = $AddressFamily.ToLowerInvariant()
@@ -1076,9 +1070,8 @@ function Set-AdapterDnsFamily([string]$AdapterName, [ValidateSet('IPv4','IPv6')]
 }
 
 function Set-AdapterDnsStatic([string]$AdapterName, [string[]]$V4, [string[]]$V6) {
-    # Set IPv4 and IPv6 DNS in a single Set-DnsClientServerAddress call so one
-    # family is never wiped by a second call. Use only when static addresses
-    # for both families are required.
+    # Set both families in one call so the second never wipes the first. Only
+    # for when static addresses for both are required.
     $adapter = Get-NetAdapter -Name $AdapterName -ErrorAction Stop
     $interfaceIndex = [int]$adapter.ifIndex
     $combined = @()
@@ -1093,9 +1086,8 @@ function Set-AdapterDnsStatic([string]$AdapterName, [string[]]$V4, [string[]]$V6
 }
 
 function Set-AdapterDnsBoth([string]$AdapterName, [string[]]$V4, [string[]]$V6) {
-    # Single-call setter that keeps families independent: an empty family
-    # means DHCP for that family, a non-empty one means static. This avoids
-    # the second-call-wipes-first-family pitfall of Set-DnsClientServerAddress.
+    # Combined setter: empty family means DHCP, non-empty means static. Avoids
+    # the second-call-wipes-first pitfall of Set-DnsClientServerAddress.
     $v4list = @($V4 | ForEach-Object { [string]$_ } | Where-Object { $_ })
     $v6list = @($V6 | ForEach-Object { [string]$_ } | Where-Object { $_ })
     if (($v4list.Count -eq 0) -and ($v6list.Count -eq 0)) {
@@ -1134,9 +1126,7 @@ function Set-AdapterDnsBoth([string]$AdapterName, [string[]]$V4, [string[]]$V6) 
 }
 
 function Set-SecureAcl([string]$Path, [switch]$AdminOnly) {
-    # Lock a directory to admins/SYSTEM only (H1): remove inherited ACLs so a
-    # standard user can never replace binaries or scripts run as SYSTEM.
-    # Uses well-known SIDs to stay language-independent.
+    # Admin/SYSTEM-only dir: strip inherited ACLs (well-known SIDs, language-independent).
     if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
         New-Item -ItemType Directory -Path $Path -Force | Out-Null
     }
@@ -1197,12 +1187,9 @@ function Log-Port53Owner {
 }
 
 function Backup-DnsSettings {
-    # Best-effort snapshot of current per-adapter DNS before the installer
-    # overwrites anything. Never throws; a missing backup must not block install.
-    # The backup lives outside the install directory so reinstalls cannot wipe it,
-    # and is never overwritten with a tainted (local or bootstrap) snapshot.
-    # H4: static DNS is detected via registry NameServer keyed by InterfaceGuid,
-    # never via the IP-interface DHCP flag (which reports IP mode, not DNS mode).
+    # Best-effort pre-install DNS snapshot; never throws. Lives outside the
+    # install dir and is never overwritten with tainted (local/bootstrap) data.
+    # Static DNS comes from registry NameServer by InterfaceGuid, not the IP DHCP flag.
     try {
         $snapshot = @()
         foreach ($adapter in @(Get-NetworkAdapters -IncludeVirtual)) {
@@ -1254,10 +1241,9 @@ function Backup-DnsSettings {
 }
 
 function Restore-DnsSettings {
-    # Restore pre-install DNS from backup (Uninstall and install/update failure
-    # paths). Reads the ProgramData backup first, then the legacy in-install-dir
-    # copy left by older versions. Matches adapters by InterfaceGuid first,
-    # then by name. Never throws: worst case falls back to DHCP (wrapped).
+    # Restore pre-install DNS (Uninstall/failure paths). Prefers the ProgramData
+    # backup, then the legacy in-dir copy; matches by InterfaceGuid, then name.
+    # Never throws; worst case resets to DHCP.
     $restoredAny = $false
     try {
         $backupPath = $null
@@ -1375,8 +1361,8 @@ function Set-LocalDns {
 }
 function Set-InstallerBootstrapDns {
     Write-Step 'Checking download connection...'
-    # Every host the installer downloads from (M5): manifest origin, release
-    # downloads and the NSSM mirror. api.github.com is gone (no API calls).
+    # Every host the installer downloads from: manifest origin, release
+    # downloads and the NSSM mirror. No api.github.com calls.
     $checkHosts = @('github.com', 'nssm.cc')
     try {
         $manifestHost = ([uri]$script:Sources.Manifest).Host
@@ -1614,11 +1600,9 @@ function Install-CommitComponents([hashtable]$Staged) {
 
         New-Item -ItemType Directory -Path $script:ZapretPath -Force | Out-Null
 
-        # WinDivert64.sys is a kernel driver and can remain locked briefly even
-        # after winws.exe and its service have stopped. If the installed driver
-        # is already identical to the staged driver, keep the locked file and
-        # replace the rest of the runtime. If the driver changed, fail safely
-        # instead of trying to delete a loaded kernel driver.
+        # A kernel driver can stay locked briefly after its service stops. Keep
+        # the locked file when staged and installed drivers are identical; fail
+        # safely on change instead of deleting a loaded driver.
         $liveDriver = Join-Path $script:ZapretPath 'WinDivert64.sys'
         $stageDriver = Join-Path $stageZap 'WinDivert64.sys'
         if (Test-Path $liveDriver) {
@@ -1680,10 +1664,9 @@ function Install-CommitComponents([hashtable]$Staged) {
                             Copy-Item -LiteralPath $_.FullName -Destination $script:ZapretPath -Recurse -Force
                         }
                 } else {
-                    # Target state differs from the live driver. Never leave a
-                    # mixed user-mode/driver combination silently: try a full
-                    # restore, and fail loudly so the user reboots and retries.
-                    # H3: never schedule reboot-deletion on the Install/Update path.
+                    # Never leave a mixed user-mode/driver pair silently: attempt a
+                    # full restore, then fail loudly (reboot and retry). No
+                    # reboot-deletion on the Install/Update path.
                     try {
                         Remove-Item -LiteralPath $script:ZapretPath -Recurse -Force -ErrorAction Stop
                         Copy-Item -LiteralPath $zapRollback -Destination $script:ZapretPath -Recurse -Force -ErrorAction Stop
@@ -2017,9 +2000,8 @@ function Write-Blacklist {
     Write-Host (('  ' + (T 'LbFile') + ': ' + $script:BlacklistFile)) -ForegroundColor DarkGray
     New-Item -ItemType Directory -Path $script:ZapretPath -Force | Out-Null
     if (-not (Test-Path $script:BlacklistFile)) {
-        # H7: UTF-8 without BOM so winws hostlist parsing never sees a BOM on
-        # line 1. An empty list means --hostlist matches nothing: winws stays
-        # Running but bypasses nothing until the user adds domains.
+        # UTF-8 without BOM (winws chokes on a BOM). Empty list matches nothing:
+        # winws runs but bypasses nothing until the user adds domains.
         $lines = @(
             '# One hostname per line.',
             '# Preserved across component updates.',
@@ -2044,8 +2026,8 @@ function Get-DefaultWinwsArgs {
 }
 
 function Get-WinwsParameters {
-    # User-tunable Zapret arguments (M3). The file wins; the built-in default
-    # below only applies when it is missing or has no effective line.
+    # The file wins; the built-in default below only applies when it is
+    # missing or has no effective line.
     try {
         if (Test-Path -LiteralPath $script:WinwsArgsFile -PathType Leaf) {
             $line = @(Get-Content -LiteralPath $script:WinwsArgsFile -ErrorAction Stop |
@@ -2081,9 +2063,8 @@ function Write-WinwsArgs {
 }
 
 function Write-WatchdogFile {
-    # Generates the standalone watchdog script. It must not dot-source
-    # the installer (which executes on load), so all logic is self-contained.
-    # M6: honors gateway-enabled flag, covers newly plugged adapters, 3-minute cadence.
+    # Standalone watchdog: must not dot-source the installer (it executes on
+    # load). Covers the gateway-enabled flag, new adapters, 3-minute cadence.
     $template = @'
 #requires -Version 5.1
 # SEDG DNS watchdog - generated by the installer. Do not edit by hand.
@@ -2212,9 +2193,8 @@ function Install-Watchdog {
     Write-Step 'Installing DNS watchdog...'
     Write-WatchdogFile
     Clear-WatchdogState
-    # M6: -FailClosed is a sticky safety posture. Once enabled it survives
-    # Install/Update; delete the fail-closed marker file (or Uninstall) to
-    # revert to DHCP fallback. Never downgrade it silently here.
+    # -FailClosed is sticky across Install/Update (never auto-downgraded).
+    # Delete the marker file (or Uninstall) to return to DHCP fallback.
     if ($FailClosed) {
         try { 'fail-closed' | Set-Content -LiteralPath $script:FailClosedFile -Encoding ASCII -NoNewline -Force } catch {}
     }
@@ -2324,9 +2304,8 @@ function Create-Services {
     Invoke-Nssm @('set', $script:DnsProxyService, 'AppRotateOnline', '1')
     Invoke-Nssm @('set', $script:DnsProxyService, 'AppRotateBytes', '1048576')
     Invoke-Nssm @('set', $script:DnsProxyService, 'Start', 'SERVICE_AUTO_START')
-    # M7: no hard dependency on winws-service. dnsproxy must survive a Zapret
-    # driver failure (HVCI/AV) instead of taking DNS down with it. Boot order
-    # is preserved with delayed auto-start.
+    # dnsproxy must survive a winws driver failure (HVCI/AV): no hard
+    # dependency; delayed auto-start preserves boot order.
     sc.exe config $script:DnsProxyService depend= Tcpip 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Failed to configure dependency for $($script:DnsProxyService)." }
     try { sc.exe config $script:DnsProxyService start= delayed-auto 2>$null | Out-Null } catch {}
@@ -2346,10 +2325,8 @@ function Create-Services {
 }
 
 function Get-ManagerSourceContent {
-    # Authoritative manager source (iex-safe). Prefers the in-memory copy
-    # captured at startup (H5), then the on-disk script; falls back to a
-    # hash-pinned re-download (Install always has working network here:
-    # staging just succeeded).
+    # Authoritative manager source (iex-safe): in-memory copy first, then the
+    # on-disk script, then a hash-pinned re-download (network works here).
     if (-not [string]::IsNullOrWhiteSpace($script:SelfContent) -and ($script:SelfContent -match 'InstallerVersion')) {
         return $script:SelfContent
     }
@@ -2386,9 +2363,8 @@ function Write-Manager {
     try { $targetPath = [System.IO.Path]::GetFullPath($managerPath) } catch { $targetPath = [string]$managerPath }
     $sameFile = (-not [string]::IsNullOrWhiteSpace($sourcePath)) -and [string]::Equals($sourcePath, $targetPath, [System.StringComparison]::OrdinalIgnoreCase)
 
-    # H5: reinstall wipes the install dir, including a running manager.ps1.
-    # Self-copy would throw on PS 5.1, but a missing target must be restored
-    # from the in-memory copy or a hash-verified download.
+    # Reinstall wipes a running manager.ps1 too; restore from memory or a
+    # hash-verified download (self-copy throws on PS 5.1).
     if ((-not $sameFile) -or (-not (Test-Path -LiteralPath $managerPath -PathType Leaf))) {
         $sourceContent = Get-ManagerSourceContent
         New-Item -ItemType Directory -Path $script:InstallPath -Force | Out-Null
@@ -2486,9 +2462,8 @@ function Remove-InstallDirectoryCleanly([string]$Path, [switch]$AllowSchedule) {
 
 function Update-ManagerFromDist([string]$ForAction) {
     # Self-update the local manager before Install/Update so an old manager
-    # never fails the installer-version check against a newer manifest and
-    # destroys a working setup (H2). Best-effort: re-execs the new manager and
-    # exits; returns $false to let the caller continue on the old code path.
+    # never fails the version check and destroys a working setup. Best-effort:
+    # re-execs the new manager and exits; $false lets the caller continue.
     try {
         $distBase = $script:Sources.Manifest -replace '/approved-releases\.json$', ''
         if ([string]::IsNullOrWhiteSpace($distBase)) { return $false }
@@ -2549,7 +2524,7 @@ function Install-All {
     if (Update-ManagerFromDist 'Install') { return }
     Write-Title ('Serverless Edge DNS Gateway with Zapret DPI Bypass - Auto Installer - ' + (T 'MiInstall'))
 
-    # Preflight: stage everything before touching the live system (H2/H4).
+    # Preflight: stage everything before touching the live system.
     # A staging failure aborts here while any existing setup keeps running.
     Write-Step 'Preparing fresh installation...'
     try {
@@ -2777,7 +2752,7 @@ function Update-All {
         Write-Host ('  ' + (T 'UpdKept')) -ForegroundColor DarkGray
     } catch {
         # Never destroy a working setup: restart the previous binaries and
-        # restore DNS instead of removing services (H2). Recovery errors are
+        # restore DNS instead of removing services. Recovery errors are
         # appended so the real failure is never masked by a silent one.
         $origErr = $_.Exception.Message
         $extra = @()
@@ -2887,7 +2862,7 @@ function Uninstall-All {
     } catch {
 
     # Locked files remain (usually WinDivert64.sys or the running manager
-    # itself). Schedule the whole tree for reboot deletion (M9).
+    # itself). Schedule the whole tree for reboot deletion.
     Schedule-DeleteTreeOnReboot $script:InstallPath
     if (Test-Path -LiteralPath $script:InstallPath) {
         Write-Host (T 'UninstStarted') -ForegroundColor Yellow
@@ -3070,9 +3045,8 @@ function Test-CDNOptimization {
     Write-Host (((T 'CdnIsp') -f $isp)) -ForegroundColor Cyan
     Write-Host ''
 
-    # Match the original BIBICADOTNET benchmark:
-    # resolve a CDN-specific hostname, ICMP-ping that hostname, then
-    # query the resolved IP for CDN location/ASN information.
+    # Match the original BIBICADOTNET benchmark: resolve a CDN hostname,
+    # ping it, then query the IP for location/ASN.
     $targets = @(
         @{ Name = 'Tiktok.com';    Domain = 'v16-webapp-prime.tiktok.com' }
         @{ Name = 'Bilibili.com';  Domain = 'upos-hz-mirrorakam.akamaized.net' }
@@ -3296,16 +3270,14 @@ try {
     try { if ($null -ne $script:SavedOutputEncoding) { [Console]::OutputEncoding = $script:SavedOutputEncoding } catch {} } catch {}
 }
 
-# A one-shot elevated run would otherwise close before the user can read the
-# result (M1). Menu has its own pauses; scheduled or piped runs have
-# redirected input and skip this.
+# Keep a one-shot elevated window open for reading. Menu pauses itself;
+# redirected/piped runs skip this.
 if (($Action -ne 'Menu') -and (-not [Console]::IsInputRedirected)) {
     Read-Host (T 'PmtContinue') | Out-Null
 }
 
-# Clean up the GUID temp copy created for irm|iex runs. The script is fully
-# loaded in memory at this point, so deleting its own temp file is safe.
-# Installed runs (manager.ps1) never match this pattern and are preserved.
+# Delete our own irm|iex temp copy (fully loaded in memory, safe). Installed
+# manager.ps1 runs never match this pattern.
 try {
     if ($script:SelfPath -like (Join-Path $env:TEMP 'serverless-edge-dns-gateway-installer-*.ps1')) {
         Remove-Item -LiteralPath $script:SelfPath -Force -ErrorAction SilentlyContinue
