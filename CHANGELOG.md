@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.3
+
+- Kill the remaining 1-2 minute outage after boot: dnsproxy now starts
+  immediately (automatic) instead of delayed-auto, since static
+  127.0.0.1 DNS turns every delayed minute into no network. Early
+  crashes still self-heal via NSSM AppExit and SCM failure actions.
+
 ## 1.0.2
 
 - Fix no-network after reboot: DNS adapters keep pointing at `127.0.0.1`

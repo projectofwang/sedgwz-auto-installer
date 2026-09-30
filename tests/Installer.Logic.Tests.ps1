@@ -266,6 +266,10 @@ Describe 'Boot resilience (no network after reboot)' {
         $src | Should -Match 'sc\.exe failure \$svcName'
         $src | Should -Match 'sc\.exe failureflag \$svcName 1'
     }
+    It 'dnsproxy starts immediately, never delayed-auto' {
+        $src = Get-Content -LiteralPath $global:SEDGInstallerPath -Raw
+        $src | Should -Not -Match 'start= delayed-auto'
+    }
     It 'LocalService can traverse the admin-only install dir' {
         $src = Get-Content -LiteralPath $global:SEDGInstallerPath -Raw
         $src | Should -Match "InstallPath /grant '\*S-1-5-19:\(OI\)\(CI\)RX'"

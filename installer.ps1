@@ -62,7 +62,7 @@ try {
     }
 } catch { $script:SelfContent = $null }
 
-$script:InstallerVersion = '1.0.2'
+$script:InstallerVersion = '1.0.3'
 $script:InstallPath = 'C:\serverless-edge-dns-gateway'
 $script:ObsoleteInstallPaths = @(
     'C:\dns-doh',
@@ -2335,10 +2335,12 @@ function Create-Services {
     Invoke-Nssm @('set', $script:DnsProxyService, 'AppRotateBytes', '1048576')
     Invoke-Nssm @('set', $script:DnsProxyService, 'Start', 'SERVICE_AUTO_START')
     # dnsproxy must survive a winws driver failure (HVCI/AV): no hard
-    # dependency; delayed auto-start preserves boot order.
+    # dependency. Immediate auto-start (not delayed-auto): with static
+    # 127.0.0.1 DNS, every delayed minute looks like no network after
+    # boot. Early crashes self-heal via NSSM AppExit/SCM recovery below.
     sc.exe config $script:DnsProxyService depend= Tcpip 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Failed to configure dependency for $($script:DnsProxyService)." }
-    try { sc.exe config $script:DnsProxyService start= delayed-auto 2>$null | Out-Null } catch {}
+    try { sc.exe config $script:DnsProxyService start= auto 2>$null | Out-Null } catch {}
     # M10: least privilege. dnsproxy only binds 127.0.0.1:53, so prefer
     # LocalService; fall back to SYSTEM when the host refuses.
     # Boot fix: the install dir is admin-only (SYSTEM+Admin), so grant
