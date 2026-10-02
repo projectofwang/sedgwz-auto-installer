@@ -1,7 +1,7 @@
 # Contributing
 
-Solo-dev repo: keep changes minimal and revertable. Every change must pass the
-same gates CI runs (`.github/workflows/ci.yml`).
+Keep changes small and easy to revert. Every change must pass the same checks
+CI runs (`.github/workflows/ci.yml`).
 
 ## Requirements
 
@@ -49,7 +49,7 @@ also appear embedded in `installer.ps1` (offline fallback manifest; CI checks
 both). Regenerate with:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-Manifest.ps1 -DnsproxyTag v0.86.0 -ZapretTag v72.14
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-Manifest.ps1 -DnsproxyTag v0.85.0 -ZapretTag v72.13
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-Manifest.ps1 -SkipDownload  # re-sync only
 ```
 
@@ -75,7 +75,8 @@ section, mirror it in `README.vi.md` (unaccented VI, same structure).
 
 ## Scope
 
-- No behavior change to install/uninstall/service/DNS in docs or test tasks.
+- Docs and test tasks must not change install, uninstall, service, or DNS
+  behavior.
 - Keep `installer.ps1` ASCII-only (no accents, no box-drawing chars).
-- Prefer small, revertable commits; record user-visible changes in
+- Prefer small commits you can undo later. Record user-visible changes in
   `CHANGELOG.md` under `## [Unreleased]`.

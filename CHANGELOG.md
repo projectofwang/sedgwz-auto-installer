@@ -27,9 +27,9 @@
 
 ## [1.0.1] - 2026-09-30
 
-- Docs and cleanup, no behavior change: rewrote `README.md` and
+- Docs cleanup, no behavior change: rewrote `README.md` and
   `cloudflare/README.md` (shorter, no duplicated sections), compressed
-  installer comments and dropped internal review tags, removed an obsolete
+  installer comments, removed internal review tags, and dropped an obsolete
   workflow example version.
 
 ## [1.0.0] - 2026-09-30

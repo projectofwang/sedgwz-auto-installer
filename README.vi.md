@@ -7,12 +7,12 @@ Trinh cai dat va quan ly tu dong cua cong gateway DNS + dieu khien luu trinh tre
 
 ## Tong quan
 
-Kho luu tru nay dong goi mot qua trinh cai dat tren Windows: tai cac thanh phan
+Kho luu tru nay cai dat Windows theo mot cach moi lan: tai cac thanh phan
 da ghim phien ban, cai dat vao thu muc co dinh, dang ky chung thanh dich vu
-Windows, va giu cau hinh DNS on dinh qua task watchdog theo lich.
+Windows, va giu DNS hoat dong qua mot task watchdog theo lich.
 
-Trinh cai dat (`installer.ps1`) dieu hanh moi thao tac thong qua mot tham so
-`-Action` va co the dung qua menu hoac dong lenh. Tat ca phien ban thanh phan
+Trinh cai dat (`installer.ps1`) lam moi viec thong qua mot tham so
+`-Action`. Ban co the dung qua menu hoac qua dong lenh. Tat ca phien ban thanh phan
 duoc ghim trong [`approved-releases.json`](approved-releases.json).
 
 ## Tinh nang
@@ -148,14 +148,14 @@ ghi de len ban sao luu DNS theo adapter cua nguoi dung. Danh sach bootstrap tron
 .\installer.ps1 -Action Update
 ```
 
-Qua trinh cap nhat doc `approved-releases.json`, so sanh phien ban thanh phan,
-tai phan thay doi vao thu muc staging, xac minh SHA-256 tung tep, sau do doi
-tep vao. Dung `-ForceUpdate` de bo qua cac kiem tra bo qua phien ban. Neu tep
+Qua trinh cap nhat doc `approved-releases.json` va so sanh phien ban thanh phan.
+Noi chi tai phan thay doi vao thu muc staging, xac minh SHA-256 tung tep, sau do
+doi tep vao. Dung `-ForceUpdate` de bo qua cac kiem tra phien ban. Neu tep
 driver bi he thong dang giu, trinh cai dat dung lai va yeu cau khoi dong lai
 thay vi xoa tep bi khoa.
 
-Metadata phat hanh duoc dang tai `version.json` kem `SHA256SUMS` de co the
-kiem tra chieu lai trinh cai dat da tai truoc khi chay.
+Metadata phat hanh duoc dang tai `version.json` kem `SHA256SUMS`, de ban co the
+kiem tra trinh cai dat da tai truoc khi chay.
 
 ## Gho bo cai dat
 
@@ -225,7 +225,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-Manifest.ps1 
 ```
 
 `tools/Update-Manifest.ps1` nhan `-DnsproxyTag`, `-ZapretTag`, `-NssmVersion`,
-`-NssmUrl`, va `-SkipDownload`; xem
+`-NssmUrl`, va `-SkipDownload`. Hay xem
 [`approved-releases.json`](approved-releases.json) cho cac phien ban hien tai
 thay vi sao chep so phien ban tu tai lieu nay.
 
@@ -284,6 +284,8 @@ Chi tiet trien khai va hosting static duoc mo ta trong
   cuc bo.
 - [Zapret](https://github.com/bol-van/zapret) cho bo dieu khien luu trinh.
 - [NSSM](https://nssm.cc/) cho bo boc goi dich vu Windows.
+
+Du an nay co AI ho tro viet code.
 
 ## Giay phep
 

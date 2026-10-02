@@ -7,13 +7,13 @@ Automatic Windows installer and manager for a local DNS + traffic-routing gatewa
 
 ## Overview
 
-This repository packages a repeatable Windows setup: it downloads pinned release
-components, installs them under a fixed directory, registers them as Windows
-services, and keeps DNS settings healthy through a scheduled watchdog task.
+This repo sets up Windows the same way every time: it downloads pinned release
+components, installs them in a fixed folder, registers them as Windows
+services, and keeps DNS working with a scheduled watchdog task.
 
-The installer script (`installer.ps1`) drives every operation through a single
-`-Action` parameter and can be used interactively (menu) or unattended
-(command line). All component versions are pinned in
+The installer script (`installer.ps1`) does everything through one `-Action`
+parameter. You can use it from the menu or from the command line. All
+component versions are pinned in
 [`approved-releases.json`](approved-releases.json).
 
 ## Features
@@ -33,7 +33,7 @@ The installer script (`installer.ps1`) drives every operation through a single
 
 ## Requirements
 
-Verified requirements enforced by the installer (`installer.ps1`):
+Requirements checked by the installer (`installer.ps1`):
 
 - Windows 10 version 1803 (build 17134) or newer.
 - 64-bit Windows on x64; ARM64 is rejected.
@@ -50,7 +50,7 @@ Run in an elevated PowerShell:
 irm https://dl.taiyuanwangjie.dpdns.org/installer.ps1 | iex
 ```
 
-Or download the repository and run the script directly (the default action is
+Or download the repo and run the script yourself (the default action is
 the interactive menu):
 
 ```powershell
@@ -148,14 +148,14 @@ used by dnsproxy also includes `9.9.9.9` and `208.67.222.222`.
 .\installer.ps1 -Action Update
 ```
 
-The update flow reads `approved-releases.json`, compares component versions,
-downloads only what changed into a staging directory, verifies each file with
-SHA-256, then swaps it in. Use `-ForceUpdate` to bypass the version skip
-checks. If a driver file is locked by the running system, the installer stops
-and asks for a reboot instead of deleting the locked file.
+The update flow reads `approved-releases.json` and compares component versions.
+It downloads only what changed into a staging folder, verifies each file with
+SHA-256, then swaps it in. Use `-ForceUpdate` to skip those version checks. If
+a driver file is locked by the running system, the installer stops and asks for
+a reboot instead of deleting the locked file.
 
-Release metadata is published as `version.json` alongside `SHA256SUMS` so a
-downloaded installer can be cross-checked before use.
+Release metadata is published as `version.json` alongside `SHA256SUMS`, so you
+can check a downloaded installer before you run it.
 
 ## Uninstalling
 
@@ -229,8 +229,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-Manifest.ps1 
 ```
 
 `tools/Update-Manifest.ps1` accepts `-DnsproxyTag`, `-ZapretTag`,
-`-NssmVersion`, `-NssmUrl`, and `-SkipDownload`; see
-[`approved-releases.json`](approved-releases.json) for the currently pinned
+`-NssmVersion`, `-NssmUrl`, and `-SkipDownload`. Check
+[`approved-releases.json`](approved-releases.json) for the current pinned
 values instead of copying version numbers from this document.
 
 Frontend / Worker assets:
@@ -289,6 +289,8 @@ Static hosting and deployment details are described in
   resolver.
 - [Zapret](https://github.com/bol-van/zapret) for the traffic-routing engine.
 - [NSSM](https://nssm.cc/) for the Windows service wrapper.
+
+This project was written with AI assistance.
 
 ## License
 

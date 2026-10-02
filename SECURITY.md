@@ -7,18 +7,18 @@
 | 1.0.x   | :white_check_mark: |
 | < 1.0.0 | :x:                |
 
-Older managers self-update to the current release on Update/Install when
-online; always update before reporting an issue.
+Older versions update themselves to the latest release when you run Update or
+Install while online. Always update before reporting an issue.
 
 ## Trust model
 
-- The installer is unsigned. Verify the download before running (see the
-  landing page 3-step check: download file, compare SHA-256 with
-  `version.json`, then run).
+- The installer is unsigned, so verify the download before you run it. The
+  landing page has the 3 steps: download the file, compare its SHA-256 with
+  `version.json`, then run it.
 - Component binaries are pinned by SHA-256 in `approved-releases.json`.
-- Manifest content is trusted via HTTPS plus the installer/manifest version
-  match. Anyone able to push to `main` or publish the Cloudflare deployment
-  can change which binaries users install: `main` blocks force-pushes, `v*`
+- The manifest is trusted through HTTPS and a matching installer/manifest
+  version. Anyone who can push to `main` or publish the Cloudflare deployment
+  can change which binaries users install. `main` blocks force-pushes, `v*`
   tags are immutable, and the Cloudflare account needs 2FA.
 
 ## Reporting a vulnerability
