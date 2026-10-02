@@ -95,6 +95,18 @@ State files: `watchdog-fallback.flag`, `watchdog-count.txt`.
 
 ## For maintainers
 
+Run the local tests before pushing (Pester 5.2+ required; Windows PowerShell
+5.1, no admin and no network needed):
+
+```powershell
+Install-Module Pester -RequiredVersion 5.2.0 -Scope CurrentUser -Force
+Import-Module Pester -MinimumVersion 5.2.0 -Force
+Invoke-Pester ./tests
+```
+
+Contribution, lint, parity and release conventions: see
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
 `approved-releases.json` pins component tags, asset names, and SHA-256 hashes
 plus the matching installer version. To ship new component versions:
 

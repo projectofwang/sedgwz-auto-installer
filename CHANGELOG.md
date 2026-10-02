@@ -1,19 +1,21 @@
 # Changelog
 
-## 1.0.4
+## [Unreleased]
+
+## [1.0.4] - 2026-10-01
 
 - Update now always refreshes `state.json`, even when binaries are
   already current (previously a skipped commit left a stale
   `InstallerVersion`, making a successful Update look like it never ran).
 
-## 1.0.3
+## [1.0.3] - 2026-10-01
 
 - Kill the remaining 1-2 minute outage after boot: dnsproxy now starts
   immediately (automatic) instead of delayed-auto, since static
   127.0.0.1 DNS turns every delayed minute into no network. Early
   crashes still self-heal via NSSM AppExit and SCM failure actions.
 
-## 1.0.2
+## [1.0.2] - 2026-09-30
 
 - Fix no-network after reboot: DNS adapters keep pointing at `127.0.0.1`
   while `dnsproxy-service` stayed `Stopped`.
@@ -23,14 +25,14 @@
   task runs AtStartup plus every 1 minute.
 - Existing installs pick the fix up via Update (recreates services/task).
 
-## 1.0.1
+## [1.0.1] - 2026-09-30
 
 - Docs and cleanup, no behavior change: rewrote `README.md` and
   `cloudflare/README.md` (shorter, no duplicated sections), compressed
   installer comments and dropped internal review tags, removed an obsolete
   workflow example version.
 
-## 1.0.0
+## [1.0.0] - 2026-09-30
 
 - Initial release: Windows auto-installer for a local DoH gateway
   (`127.0.0.1`) with Zapret DPI bypass.
@@ -45,3 +47,10 @@
 - Supply chain: pinned manifest with embedded fallback, GitHub Releases as
   a second origin for hash cross-checks, CI (syntax, Pester, parity,
   Cloudflare build), upstream component watcher.
+
+[Unreleased]: https://github.com/projectofwang/sedgwz-auto-installer/compare/v1.0.4...HEAD
+[1.0.4]: https://github.com/projectofwang/sedgwz-auto-installer/compare/v1.0.3...v1.0.4
+[1.0.3]: https://github.com/projectofwang/sedgwz-auto-installer/compare/v1.0.2...v1.0.3
+[1.0.2]: https://github.com/projectofwang/sedgwz-auto-installer/compare/v1.0.1...v1.0.2
+[1.0.1]: https://github.com/projectofwang/sedgwz-auto-installer/compare/v1.0.0...v1.0.1
+[1.0.0]: https://github.com/projectofwang/sedgwz-auto-installer/releases/tag/v1.0.0
