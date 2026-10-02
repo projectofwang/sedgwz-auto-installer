@@ -1,138 +1,297 @@
-# Serverless Edge DNS Gateway with Zapret DPI Bypass
+# sedgwz-auto-installer
 
-Windows auto-installer for a local DoH gateway (`127.0.0.1`) with DPI bypass.
+Automatic Windows installer and manager for a local DNS + traffic-routing gateway built on Zapret and AdGuard DNSProxy.
+
+[![CI](https://github.com/projectofwang/sedgwz-auto-installer/actions/workflows/ci.yml/badge.svg)](https://github.com/projectofwang/sedgwz-auto-installer/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/projectofwang/sedgwz-auto-installer)](https://github.com/projectofwang/sedgwz-auto-installer/releases)
+
+## Overview
+
+This repository packages a repeatable Windows setup: it downloads pinned release
+components, installs them under a fixed directory, registers them as Windows
+services, and keeps DNS settings healthy through a scheduled watchdog task.
+
+The installer script (`installer.ps1`) drives every operation through a single
+`-Action` parameter and can be used interactively (menu) or unattended
+(command line). All component versions are pinned in
+[`approved-releases.json`](approved-releases.json).
+
+## Features
+
+- One-line install, update, pause, resume, restart, status, and uninstall actions.
+- Menu-driven launcher (`Gateway-Manager.bat`, created in the install folder)
+  that self-elevates to administrator.
+- DNS service (dnsproxy) with selectable upstream presets or a custom DoH/DoT/DoH3/DoQ endpoint.
+- Traffic-routing service (winws) with an editable argument file and an optional domain blacklist.
+- Watchdog scheduled task that runs every minute and restores DHCP-assigned DNS after
+  3 consecutive failures (fail-open; can be made sticky with `-FailClosed`).
+- Automatic coverage of newly connected network adapters.
+- Staged, per-file SHA-256 verified downloads written to an administrator-only directory.
+- Per-adapter DNS backups that are never overwritten with temporary bootstrap data.
+- Fail-safe rollback: a failed install or update restores the previous state.
+- Localized menu output (English and Vietnamese).
+
+## Requirements
+
+Verified requirements enforced by the installer (`installer.ps1`):
+
+- Windows 10 version 1803 (build 17134) or newer.
+- 64-bit Windows on x64; ARM64 is rejected.
+- Windows PowerShell 5.1 or newer.
+- Administrator privileges (the launcher and script elevate automatically).
+- Outbound HTTPS access to the release endpoints listed in
+  [`approved-releases.json`](approved-releases.json).
 
 ## Install
 
-Run in **PowerShell as Administrator**:
+Run in an elevated PowerShell:
 
 ```powershell
 irm https://dl.taiyuanwangjie.dpdns.org/installer.ps1 | iex
 ```
 
-## Requirements
+Or download the repository and run the script directly (the default action is
+the interactive menu):
 
-- 64-bit Windows 10 1803+ (x64 only; WinDivert has no ARM64 driver).
-- PowerShell 5.1+, Administrator rights.
-- If `winws-service` won't start, read `zapret\winws.log` — HVCI, Defender,
-  or AV often blocks `WinDivert64.sys`. DNS stays online via DHCP fallback
-  (see Watchdog).
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\installer.ps1 -Action Install
+```
 
-## What it does
+The default installation directory is `C:\serverless-edge-dns-gateway`. The
+install registers two services (`winws-service`, `dnsproxy-service`) and one
+scheduled task (`SEDG-DNS-Watchdog`).
 
-Installs to `C:\serverless-edge-dns-gateway` (admins/SYSTEM only):
+## Usage
 
-1. Backs up per-adapter DNS (registry `NameServer` by `InterfaceGuid`) to
-   ProgramData. The backup is never overwritten with local/bootstrap addresses.
-2. Stages and SHA-256-verifies every download in an admin-only staging dir
-   before touching the live system. Reinstalls go through Update unless
-   `-Clean` is given.
-3. Downloads pinned releases over HTTPS (no GitHub API): DNSProxy `v0.85.0`,
-   Zapret `v72.13`, NSSM `2.24` (with mirror fallback).
-4. Preserves `config.yaml`, `blacklist.txt`, `winws-args.txt` across reinstalls.
-   Fresh installs write a `config.yaml` template (DoH upstream + neutral
-   fallback, bootstrap resolvers, cache with 3600s max TTL), an empty
-   `blacklist.txt`, and a commented `winws-args.txt` (UTF-8, no BOM).
-5. Creates `winws-service` (DPI bypass) and `dnsproxy-service` (DoH,
-   LocalService, no hard dependency on winws so DNS survives driver failure),
-   plus the `SEDG-DNS-Watchdog` scheduled task (every 3 minutes).
-6. Drops `manager.ps1` (self-restores if wiped mid-install) with the single
-   self-elevating launcher `Gateway-Manager.bat`.
-7. Points physical adapters at `127.0.0.1` / `::1`. VPN/virtual adapters keep
-   their DNS. Temporary bootstrap DNS (`1.1.1.1`/`8.8.8.8`) is applied only
-   when release hosts don't resolve.
+Command line:
 
-Any failure restores the previous state: old services restart and DNS rolls
-back to the pre-install backup (DHCP when no backup applies). Locked drivers
-abort the install — reboot and retry. Nothing is scheduled for reboot-deletion
-outside Uninstall.
+```powershell
+# Install
+.\installer.ps1 -Action Install
 
-Flags: `-Clean` (full wipe reinstall), `-DnsOnly` (skip Zapret),
-`-ForceUpdate`, `-Purge` (uninstall also drops logs + saved language),
-`-FailClosed` (watchdog never falls back to DHCP).
+# Show status (versions, upstream, local DNS)
+.\installer.ps1 -Action Status
 
-Limits: browsers with their own DoH bypass the gateway; an empty
-`blacklist.txt` matches nothing until you add domains.
+# Change the DNS upstream (an absolute encrypted-DNS URL)
+.\installer.ps1 -Action SetUpstream -Upstream https://cloudflare-dns.com/dns-query
 
-## DNS upstream
+# Restart, pause, or resume the services
+.\installer.ps1 -Action Restart
+.\installer.ps1 -Action Pause
+.\installer.ps1 -Action Resume
 
-Menu `[7]` offers Taiyuan SDNS (default), Cloudflare, Google, Quad9, AdGuard,
-or a custom `https://`/`tls://`/`h3://`/`quic://` URL. The active upstream is
-stored in `config.yaml` and shown by Status.
+# Update to the latest approved release
+.\installer.ps1 -Action Update
 
-## Watchdog
+# Uninstall
+.\installer.ps1 -Action Uninstall
+```
 
-`SEDG-DNS-Watchdog` (SYSTEM, every 3 minutes) probes the gateway via
-`127.0.0.1`. After 3 consecutive failures it moves gateway adapters to DHCP
-and restores local DNS on recovery — fail-open by design, so pass
-`-FailClosed` at Install/Update to stay on local DNS instead. It stays idle
-while paused/uninstalled and also covers newly plugged physical adapters.
-State files: `watchdog-fallback.flag`, `watchdog-count.txt`.
+Actions: `Install`, `Update`, `Pause`, `Resume`, `Restart`, `Uninstall`,
+`Status`, `SetUpstream`, `SetDns`, `Menu`.
+
+Available switches:
+
+| Switch | Effect |
+| --- | --- |
+| `-Upstream <value>` | Absolute upstream URL using `https://`, `tls://`, `h3://`, or `quic://`. Preset names are chosen interactively from the menu. |
+| `-Language <en\|vi>` | Menu language for this run. |
+| `-IncludeCdnTest` | Run the CDN reachability test after install or update. |
+| `-ForceUpdate` | Skip early-out version checks and force a fresh download. |
+| `-Clean` | Perform a fresh install instead of the in-place update route. |
+| `-DnsOnly` | Install DNS only; the winws service is registered with a manual (demand) start type and is not started. |
+| `-Purge` | With `Uninstall`, also remove logs, the language file, touched-adapter records, and staging data. |
+| `-FailClosed` | Disable the DHCP fallback (persisted for the watchdog). |
+| `-Action Menu` | Open the interactive menu. |
+
+Interactive menu (after `-Action Menu` or by running `Gateway-Manager.bat`):
+
+1. Install
+2. Update
+3. Status
+4. Restart
+5. Pause
+6. Resume
+7. DNS upstream
+8. System DNS
+9. CDN test
+10. Uninstall
+11. Language
+0. Exit
+
+## Configuration
+
+Files live under the install directory (`C:\serverless-edge-dns-gateway`):
+
+| File | Purpose |
+| --- | --- |
+| `config.yaml` | dnsproxy configuration: local listeners `127.0.0.1:53` and `[::1]:53`, upstream server, fallback resolver, bootstrap servers, cache TTL. |
+| `blacklist.txt` | Domain rules for winws. Empty by default, which matches nothing (no traffic is altered until entries are added). |
+| `winws-args.txt` | winws command-line arguments, stored as UTF-8 without BOM. |
+
+`config.yaml`, `blacklist.txt`, and `winws-args.txt` are preserved across
+updates and reinstalls.
+
+DNS upstream presets: Taiyuan SDNS (default), Cloudflare, Google, Quad9,
+AdGuard, or a custom encrypted-DNS URL. The active upstream is shown by
+`-Action Status` and stored in `config.yaml`.
+
+Bootstrap resolvers (`1.1.1.1`, `8.8.8.8`, and their IPv6 equivalents) are
+applied to physical adapters only when the release hosts do not resolve, so
+downloads can still succeed. These temporary values are tracked and never
+written over a user's per-adapter DNS backup. The `config.yaml` bootstrap list
+used by dnsproxy also includes `9.9.9.9` and `208.67.222.222`.
+
+## Updating
+
+```powershell
+.\installer.ps1 -Action Update
+```
+
+The update flow reads `approved-releases.json`, compares component versions,
+downloads only what changed into a staging directory, verifies each file with
+SHA-256, then swaps it in. Use `-ForceUpdate` to bypass the version skip
+checks. If a driver file is locked by the running system, the installer stops
+and asks for a reboot instead of deleting the locked file.
+
+Release metadata is published as `version.json` alongside `SHA256SUMS` so a
+downloaded installer can be cross-checked before use.
+
+## Uninstalling
+
+```powershell
+.\installer.ps1 -Action Uninstall
+```
+
+Uninstall stops and removes both services, removes the watchdog task, and
+restores the per-adapter DNS backups taken at install time. Files that are
+locked by Windows are scheduled for deletion at the next reboot. Add `-Purge`
+to also delete logs, the language file, touched-adapter records, and staging
+data.
 
 ## Troubleshooting
 
-- `winws-service` won't stay running: read `zapret\winws.log` (HVCI/AV
-  blocking the driver is the usual cause); DNS stays on DHCP meanwhile.
-- `Reboot required` after update: the staged driver differs from the loaded
-  one; reboot, then run Update again.
-- New adapter without local DNS: run menu `[8]` System DNS, or set
-  `127.0.0.1` / `::1` manually. Status warns about uncovered adapters.
-- Slow downloads on old PowerShell: progress output is silenced by design;
-  downloads use curl with retries (PowerShell fallback).
+- **Check current state**: `.\installer.ps1 -Action Status` reports service
+  state, local DNS, the active upstream, and installed component versions.
+- **Service logs**: winws output is written to `zapret\winws.log` under the
+  install directory; dnsproxy writes `dnsproxy.log` and `dnsproxy-nssm.log`
+  under the `dnsproxy` directory. The winws log path is also shown by the
+  status action.
+- **"Reboot required" during update**: a staged driver differs from the loaded
+  one. Reboot Windows and run the update again; the installer does not delete
+  locked driver files outside of uninstall.
+- **Adapter not covered**: the status output can warn that a specific adapter
+  is not using the local resolver. Re-run `-Action Restart` or `-Action SetDns`
+  so the watchdog re-applies DNS to the new adapter.
+- **DNS falls back to DHCP**: after 3 consecutive watchdog failures the task
+  switches the adapter back to DHCP-assigned DNS (fail-open). Check
+  `winws.log`, then restart the services; with `-FailClosed` the fallback is
+  disabled and the previous state is kept instead.
+- **Downloads fail**: install requires HTTPS reachability to the release host.
+  Bootstrap DNS is applied automatically only when release hosts do not
+  resolve.
 
 ## Trust and privacy
 
-- The default DoH upstream sees all your DNS queries and can answer
-  arbitrarily; switch presets via menu `[7]` if needed.
-- Release zips come from `github.com` and `nssm.cc`; the manifest comes from
-  the Cloudflare domain with a GitHub-raw fallback.
-- The installer writes services, a scheduled task, and per-adapter DNS. Logs
-  live under the install dir and `%ProgramData%\serverless-edge-dns-gateway\logs`.
-- No telemetry is sent anywhere by this project.
-- Verify before running (commands on the landing page): compare the download
-  hash against `version.json`, then cross-check `SHA256SUMS` against GitHub
-  Releases (different origin).
+- No telemetry: the installer and services make no analytics or reporting
+  calls. Network traffic is limited to release downloads, the release manifest,
+  configured DNS upstreams, and traffic-routing rules the user enables.
+- HTTPS-only downloads with per-file SHA-256 verification. Staging happens in
+  an administrator-only directory under `ProgramData`.
+- No GitHub API usage: downloads go directly to release asset URLs, and the
+  release manifest is fetched from the project endpoint with a raw GitHub
+  fallback.
+- Component versions are pinned in `approved-releases.json`; the manifest can
+  fall back to an embedded copy, in which case the installer warns that it is
+  using embedded versions.
+- Releases are published from `vX.Y.Z` tags protected by an immutable-tag
+  ruleset, and releases created by the workflow are marked immutable.
+- The installer script and release binaries are not code-signed; verify the
+  checksum files before running them.
+- DNS backups are stored per adapter (by interface GUID) and are only restored
+  with the values captured at install time.
+- An empty `blacklist.txt` matches nothing, so a default install changes no
+  application traffic.
 
-## For maintainers
+## Development
 
-Run the local tests before pushing (Pester 5.2+ required; Windows PowerShell
-5.1, no admin and no network needed):
+Repository tasks:
 
 ```powershell
-Install-Module Pester -RequiredVersion 5.2.0 -Scope CurrentUser -Force
-Import-Module Pester -MinimumVersion 5.2.0 -Force
+# Run the test suite (Pester 5.2 or newer)
 Invoke-Pester ./tests
+
+# Lint (PSScriptAnalyzer, errors only)
+Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error -ExcludeRule PSAvoidUsingWriteHost
+
+# Re-sync the embedded fallback manifest from approved-releases.json
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-Manifest.ps1 -SkipDownload
 ```
 
-Contribution, lint, parity and release conventions: see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+`tools/Update-Manifest.ps1` accepts `-DnsproxyTag`, `-ZapretTag`,
+`-NssmVersion`, `-NssmUrl`, and `-SkipDownload`; see
+[`approved-releases.json`](approved-releases.json) for the currently pinned
+values instead of copying version numbers from this document.
 
-`approved-releases.json` pins component tags, asset names, and SHA-256 hashes
-plus the matching installer version. To ship new component versions:
+Frontend / Worker assets:
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-Manifest.ps1 -DnsproxyTag v0.86.0 -ZapretTag v72.14
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-Manifest.ps1 -SkipDownload  # re-sync only
+```bash
+npm run build:cloudflare   # build the Cloudflare assets
+npm test                   # same Pester suite via npm
 ```
 
-Then bump `$script:InstallerVersion` and `installer.version` together — the
-build fails on mismatch. A weekly `component-watch` workflow opens a review PR
-on new upstream tags; merging to `main` deploys via Cloudflare, and pushing a
-`vX.Y.Z` tag publishes GitHub Releases (tag must match the installer version;
-tags and releases are immutable).
+Static hosting and deployment details are described in
+[`cloudflare/README.md`](cloudflare/README.md). Contribution guidelines are in
+[`CONTRIBUTING.md`](CONTRIBUTING.md) and security reporting in
+[`SECURITY.md`](SECURITY.md).
 
-Trust model: HTTPS transport plus installer/manifest version match. The
-installer is unsigned — there is no detached signature to verify. The
-`taiyuanwangjie.dpdns.org` subdomain is registered to the maintainer and
-managed in the maintainer's own Cloudflare account (`dl.` serves the
-installer/manifest, `sdns.` the default upstream). `main` blocks force-pushes
-and `v*` tags cannot be deleted or moved, so protect the Cloudflare account
-(2FA) and the `COMPONENT_WATCH_TOKEN` secret: anyone able to push to `main`
-or publish the deployment controls what users install. Third-party licenses:
-see `THIRD-PARTY.md`.
+## Release process
+
+- Releases are created from `vX.Y.Z` tags; the tag must match the installer
+  version declared in `installer.ps1`, otherwise the workflow fails.
+- The release workflow builds the assets, generates `version.json` and
+  `SHA256SUMS`, and publishes the release.
+- A scheduled workflow runs every Monday at 02:00 UTC, checks the pinned
+  upstream component versions, and opens a pull request when a new version is
+  available.
+- Pushing to `main` runs the CI workflow (checks only). Deployment of the
+  download and SDNS endpoints is handled by the Cloudflare Git integration;
+  see [`cloudflare/README.md`](cloudflare/README.md).
+
+## Project layout
+
+```text
+.
+|-- .github/
+|   `-- workflows/          CI, release, and component-watch workflows
+|-- cloudflare/             Worker source, build script, deployment docs
+|-- tests/                  Pester test suite
+|   |-- Installer.Logic.Tests.ps1
+|   `-- Installer.Maintain.Tests.ps1
+|-- tools/
+|   `-- Update-Manifest.ps1 Regenerates approved-releases.json
+|-- approved-releases.json  Pinned component versions and manifest URLs
+|-- installer.ps1           Installer, menu, services, and watchdog logic
+|-- package.json            Build, deploy, and test scripts
+|-- CHANGELOG.md
+|-- CODEOWNERS
+|-- CONTRIBUTING.md
+|-- SECURITY.md
+|-- THIRD-PARTY.md
+`-- LICENSE
+```
 
 ## Thanks
 
-Thanks to **BIBICADOTNET** for the original automatic installation script and concept.
-Thanks to the **AdGuard DNSProxy**, **Zapret**, and **NSSM** projects for their open-source software.
-Thanks to everyone testing and reporting issues.
+- [BIBICADOTNET](https://github.com/BIBICADOTNET) for the original automatic
+  install script concept.
+- [AdGuard DNSProxy](https://github.com/AdguardTeam/dnsproxy) for the local DNS
+  resolver.
+- [Zapret](https://github.com/bol-van/zapret) for the traffic-routing engine.
+- [NSSM](https://nssm.cc/) for the Windows service wrapper.
+
+## License
+
+This project is licensed under the MIT License. See [`LICENSE`](LICENSE) for
+the full text. Third-party components keep their own licenses; see
+[`THIRD-PARTY.md`](THIRD-PARTY.md).
