@@ -39,7 +39,7 @@ try {
     if ([Console]::OutputEncoding.IsSingleByte) {
         [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
     }
-} catch {}
+} catch { Write-Warning ('SEDG:script: if ([Console]::OutputEncoding.IsSingleByte) { [Console]::Out... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 
 $script:ManifestCache = $null
 
@@ -62,8 +62,19 @@ try {
     }
 } catch { $script:SelfContent = $null }
 
+#region MaintainConfig
+# Single source of truth for install layout, pinned versions and upstream
+# sources. Values below are the historical defaults and never change here;
+# SEDG_INSTALL_PATH / SEDG_MANIFEST_URL only override them when explicitly
+# set (optional, for tests and packaging - nothing requires them).
+
 $script:InstallerVersion = '1.0.4'
-$script:InstallPath = 'C:\serverless-edge-dns-gateway'
+# Install root. Default unchanged; set SEDG_INSTALL_PATH to relocate.
+if (-not [string]::IsNullOrWhiteSpace($env:SEDG_INSTALL_PATH)) {
+    $script:InstallPath = $env:SEDG_INSTALL_PATH
+} else {
+    $script:InstallPath = 'C:\serverless-edge-dns-gateway'
+}
 $script:ObsoleteInstallPaths = @(
     'C:\dns-doh',
     'C:\dns-bibica-net-doh'
@@ -91,8 +102,11 @@ $script:WatchdogScript = Join-Path $InstallPath 'watchdog.ps1'
 $script:WatchdogFlag = Join-Path $InstallPath 'watchdog-fallback.flag'
 $script:WatchdogCount = Join-Path $InstallPath 'watchdog-count.txt'
 
+# Primary manifest URL. Default unchanged; SEDG_MANIFEST_URL overrides it.
+$manifestUrl = 'https://dl.taiyuanwangjie.dpdns.org/approved-releases.json'
+if (-not [string]::IsNullOrWhiteSpace($env:SEDG_MANIFEST_URL)) { $manifestUrl = $env:SEDG_MANIFEST_URL }
 $script:Sources = @{
-    Manifest         = 'https://dl.taiyuanwangjie.dpdns.org/approved-releases.json'
+    Manifest         = $manifestUrl
     ManifestFallback = 'https://raw.githubusercontent.com/projectofwang/sedgwz-auto-installer/main/approved-releases.json'
     NssmZip     = 'https://nssm.cc/release/nssm-2.24.zip'
 }
@@ -100,6 +114,17 @@ $script:NssmVersion = '2.24'
 $script:NssmSha256 = '727d1e42275c605e0f04aba98095c38a8e1e46def453cdffce42869428aa6743'
 $script:LangDir = Join-Path $env:APPDATA 'serverless-edge-dns-gateway'
 $script:LangFile = Join-Path $script:LangDir 'lang.txt'
+
+# Preset DoH upstreams offered by the menu; the first entry is the default.
+$script:OptionalUpstreams = [ordered]@{
+    'Taiyuan SDNS (Default)' = 'https://sdns.taiyuanwangjie.dpdns.org/dns-query'
+    'Cloudflare' = 'https://cloudflare-dns.com/dns-query'
+    'Google' = 'https://dns.google/dns-query'
+    'Quad9' = 'https://dns.quad9.net/dns-query'
+    'AdGuard' = 'https://dns.adguard-dns.com/dns-query'
+}
+
+#endregion MaintainConfig
 
 $script:Texts = @{
   EN = @{
@@ -392,7 +417,7 @@ function Get-SavedLang {
     try {
         $v = ((Get-Content -LiteralPath $script:LangFile -Raw -ErrorAction Stop).Trim().ToUpperInvariant())
         if ($v -in @('EN','VI')) { return $v }
-    } catch {}
+    } catch { Write-Warning ('SEDG:Get-SavedLang: $v = ((Get-Content -LiteralPath $script:LangFile -Raw -Error... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     return 'EN'
 }
 
@@ -404,7 +429,7 @@ function Save-Lang([string]$Lang) {
 $script:Lang = Get-SavedLang
 if ($Language.ToUpperInvariant() -in @('EN','VI')) {
     $script:Lang = $Language.ToUpperInvariant()
-    try { Save-Lang $script:Lang } catch {}
+    try { Save-Lang $script:Lang } catch { Write-Warning ('SEDG:script: Save-Lang $script:Lang (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 }
 
 function Write-Step([string]$Text) {
@@ -483,7 +508,7 @@ function Ensure-Administrator {
     # M5/iex: materialize the running script so elevation never executes stale code.
     if (-not (Test-Path -LiteralPath $script:SelfPath -PathType Leaf)) {
         if (-not [string]::IsNullOrWhiteSpace($script:SelfContent) -and ($script:SelfContent -match 'InstallerVersion')) {
-            try { [IO.File]::WriteAllText($script:SelfPath, $script:SelfContent, [Text.UTF8Encoding]::new($false)) } catch {}
+            try { [IO.File]::WriteAllText($script:SelfPath, $script:SelfContent, [Text.UTF8Encoding]::new($false)) } catch { Write-Warning ('SEDG:Ensure-Administrator: [IO.File]::WriteAllText($script:SelfPath, $script:SelfConten... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         }
     }
     if (-not (Test-Path -LiteralPath $script:SelfPath -PathType Leaf)) {
@@ -515,7 +540,7 @@ function Clear-StaleTempInstallers {
         Get-ChildItem -LiteralPath $env:TEMP -Filter 'serverless-edge-dns-gateway-installer-*.ps1' -File -ErrorAction SilentlyContinue |
             Where-Object { $_.FullName -ne $script:SelfPath -and $_.LastWriteTimeUtc -lt (Get-Date).ToUniversalTime().AddDays(-7) } |
             Remove-Item -Force -ErrorAction SilentlyContinue
-    } catch {}
+    } catch { Write-Warning ('SEDG:Clear-StaleTempInstallers: Get-ChildItem -LiteralPath $env:TEMP -Filter ''serverless-edg... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 }
 
 $script:InstallerMutex = $null
@@ -534,7 +559,7 @@ function Enter-InstallerMutex {
         $acquired = $true
     }
     if (-not $acquired) {
-        try { $mutex.Dispose() } catch {}
+        try { $mutex.Dispose() } catch { Write-Warning ('SEDG:Enter-InstallerMutex: $mutex.Dispose() (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         throw (T 'MutexBusy')
     }
     $script:InstallerMutex = $mutex
@@ -548,7 +573,7 @@ function Exit-InstallerMutex {
             $script:InstallerMutex.ReleaseMutex()
             $script:InstallerMutex.Dispose()
         }
-    } catch {} finally {
+    } catch { Write-Warning ('SEDG:Exit-InstallerMutex: if ($script:InstallerMutex) { $script:InstallerMutex.Release... (' + $_.Exception.Message + ')'); Write-Verbose $_ } finally {
         $script:InstallerMutex = $null
         $script:MutexDepth = 0
     }
@@ -566,7 +591,7 @@ function Start-OpTranscript([string]$ForAction) {
                 Sort-Object LastWriteTime -Descending |
                 Select-Object -Skip 10 |
                 Remove-Item -Force -ErrorAction SilentlyContinue
-        } catch {}
+        } catch { Write-Warning ('SEDG:Start-OpTranscript: Get-ChildItem -LiteralPath $logDir -Filter ''transcript-*.txt... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
         $script:OpTranscript = Join-Path $logDir ("transcript-" + $ForAction + "-" + $stamp + ".txt")
         Start-Transcript -LiteralPath $script:OpTranscript -ErrorAction Stop | Out-Null
@@ -576,7 +601,7 @@ function Start-OpTranscript([string]$ForAction) {
 function Stop-OpTranscript {
     if (-not $script:OpTranscript) { return }
     $script:OpTranscript = $null
-    try { Stop-Transcript -ErrorAction Stop | Out-Null } catch {}
+    try { Stop-Transcript -ErrorAction Stop | Out-Null } catch { Write-Warning ('SEDG:Stop-OpTranscript: Stop-Transcript -ErrorAction Stop | Out-Null (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 }
 
 function Test-Platform {
@@ -956,10 +981,10 @@ function Schedule-DeleteTreeOnReboot([string]$Path) {
         $ordered = @($entries | Where-Object { -not $_.PSIsContainer }) +
             @($entries | Where-Object { $_.PSIsContainer } | Sort-Object { $_.FullName.Length } -Descending)
         foreach ($entry in @($ordered)) {
-            try { Schedule-DeleteOnReboot $entry.FullName } catch {}
+            try { Schedule-DeleteOnReboot $entry.FullName } catch { Write-Warning ('SEDG:Schedule-DeleteTreeOnReboot: Schedule-DeleteOnReboot $entry.FullName (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         }
-    } catch {}
-    try { Schedule-DeleteOnReboot $Path } catch {}
+    } catch { Write-Warning ('SEDG:Schedule-DeleteTreeOnReboot: $entries = @(Get-ChildItem -LiteralPath $Path -Recurse -Forc... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+    try { Schedule-DeleteOnReboot $Path } catch { Write-Warning ('SEDG:Schedule-DeleteTreeOnReboot: Schedule-DeleteOnReboot $Path (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 }
 
 function Start-AllServices {
@@ -970,10 +995,10 @@ function Start-AllServices {
             Remove-Item -LiteralPath ($dnsLog + '.old') -Force -ErrorAction SilentlyContinue
             Rename-Item -LiteralPath $dnsLog -NewName 'dnsproxy.log.old' -ErrorAction SilentlyContinue
         }
-    } catch {}
+    } catch { Write-Warning ('SEDG:Start-AllServices: $dnsLog = Join-Path $script:DnsProxyPath ''dnsproxy.log'' if (... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     if ($DnsOnly) {
         Write-Host '  DnsOnly mode: skipping winws-service.' -ForegroundColor Yellow
-        try { Stop-Service -Name $script:WinwsService -Force -ErrorAction SilentlyContinue } catch {}
+        try { Stop-Service -Name $script:WinwsService -Force -ErrorAction SilentlyContinue } catch { Write-Warning ('SEDG:Start-AllServices: Stop-Service -Name $script:WinwsService -Force -ErrorAction ... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     } else {
     Write-Step 'Starting Zapret...'
     Write-Host (('  ' + (T 'LbService') + ': ' + $script:WinwsService)) -ForegroundColor DarkGray
@@ -982,7 +1007,7 @@ function Start-AllServices {
         Start-Service -Name $script:WinwsService -ErrorAction Stop
     } catch {
         $nssmStatus = ''
-        try { $nssmStatus = (& $script:NssmPath status $script:WinwsService 2>&1 | Out-String).Trim() } catch {}
+        try { $nssmStatus = (& $script:NssmPath status $script:WinwsService 2>&1 | Out-String).Trim() } catch { Write-Warning ('SEDG:Start-AllServices: $nssmStatus = (& $script:NssmPath status $script:WinwsServic... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         $log = Join-Path $script:ZapretPath 'winws.log'
         $logText = if (Test-Path $log) { (Get-Content -LiteralPath $log -Tail 40 -ErrorAction SilentlyContinue) -join [Environment]::NewLine } else { '' }
         throw ("Failed to start {0}. NSSM: {1}{2}winws.log:{3}" -f $script:WinwsService, $nssmStatus, [Environment]::NewLine, $logText)
@@ -993,7 +1018,7 @@ function Start-AllServices {
     $winws = Get-Service -Name $script:WinwsService -ErrorAction Stop
     if ($winws.Status -ne 'Running') {
         $nssmStatus = ''
-        try { $nssmStatus = (& $script:NssmPath status $script:WinwsService 2>&1 | Out-String).Trim() } catch {}
+        try { $nssmStatus = (& $script:NssmPath status $script:WinwsService 2>&1 | Out-String).Trim() } catch { Write-Warning ('SEDG:Start-AllServices: $nssmStatus = (& $script:NssmPath status $script:WinwsServic... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         $log = Join-Path $script:ZapretPath 'winws.log'
         $logText = if (Test-Path $log) { (Get-Content -LiteralPath $log -Tail 40 -ErrorAction SilentlyContinue) -join [Environment]::NewLine } else { '' }
         throw ("Service did not remain running: {0} ({1}). NSSM: {2}{3}winws.log:{4}" -f $script:WinwsService, $winws.Status, $nssmStatus, [Environment]::NewLine, $logText)
@@ -1008,7 +1033,7 @@ function Start-AllServices {
         Start-Service -Name $script:DnsProxyService -ErrorAction Stop
     } catch {
         $nssmStatus = ''
-        try { $nssmStatus = (& $script:NssmPath status $script:DnsProxyService 2>&1 | Out-String).Trim() } catch {}
+        try { $nssmStatus = (& $script:NssmPath status $script:DnsProxyService 2>&1 | Out-String).Trim() } catch { Write-Warning ('SEDG:Start-AllServices: $nssmStatus = (& $script:NssmPath status $script:DnsProxySer... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         $log = Join-Path $script:DnsProxyPath 'dnsproxy.log'
         $logText = if (Test-Path $log) { (Get-Content -LiteralPath $log -Tail 40 -ErrorAction SilentlyContinue) -join [Environment]::NewLine } else { '' }
         throw ("Failed to start {0}: {1}{2}NSSM: {3}{4}dnsproxy.log:{5}" -f $script:DnsProxyService, $_.Exception.Message, [Environment]::NewLine, $nssmStatus, [Environment]::NewLine, $logText)
@@ -1018,7 +1043,7 @@ function Start-AllServices {
     $dns = Get-Service -Name $script:DnsProxyService -ErrorAction Stop
     if ($dns.Status -ne 'Running') {
         $nssmStatus = ''
-        try { $nssmStatus = (& $script:NssmPath status $script:DnsProxyService 2>&1 | Out-String).Trim() } catch {}
+        try { $nssmStatus = (& $script:NssmPath status $script:DnsProxyService 2>&1 | Out-String).Trim() } catch { Write-Warning ('SEDG:Start-AllServices: $nssmStatus = (& $script:NssmPath status $script:DnsProxySer... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         throw ("Service did not remain running: {0} ({1}). NSSM: {2}" -f $script:DnsProxyService, $dns.Status, $nssmStatus)
     }
     Write-Done 'DNSProxy is running.'
@@ -1107,10 +1132,10 @@ function Set-AdapterDnsBoth([string]$AdapterName, [string[]]$V4, [string[]]$V6) 
             $curV6 = @(Get-DnsClientServerAddress -InterfaceIndex $a.ifIndex -ErrorAction Stop |
                 Select-Object -ExpandProperty ServerAddresses | ForEach-Object { [string]$_ } |
                 Where-Object { $_ -and $_ -ne '127.0.0.1' -and $_ -ne '::1' -and ($_ -match ':') })
-        } catch {}
+        } catch { Write-Warning ('SEDG:Set-AdapterDnsBoth: $a = Get-NetAdapter -Name $AdapterName -ErrorAction Stop $cu... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         if ($curV6.Count -gt 0) { Set-AdapterDnsStatic $AdapterName $v4list $curV6; return }
         Set-AdapterDnsFamily $AdapterName IPv4 -ServerAddresses $v4list
-        try { Set-AdapterDnsFamily $AdapterName IPv6 -Dhcp } catch {}
+        try { Set-AdapterDnsFamily $AdapterName IPv6 -Dhcp } catch { Write-Warning ('SEDG:Set-AdapterDnsBoth: Set-AdapterDnsFamily $AdapterName IPv6 -Dhcp (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         return
     }
     $curV4 = @()
@@ -1119,10 +1144,10 @@ function Set-AdapterDnsBoth([string]$AdapterName, [string[]]$V4, [string[]]$V6) 
         $curV4 = @(Get-DnsClientServerAddress -InterfaceIndex $a.ifIndex -ErrorAction Stop |
             Select-Object -ExpandProperty ServerAddresses | ForEach-Object { [string]$_ } |
             Where-Object { $_ -and $_ -ne '127.0.0.1' -and $_ -ne '::1' -and ($_ -notmatch ':') })
-    } catch {}
+    } catch { Write-Warning ('SEDG:Set-AdapterDnsBoth: $a = Get-NetAdapter -Name $AdapterName -ErrorAction Stop $cu... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     if ($curV4.Count -gt 0) { Set-AdapterDnsStatic $AdapterName $curV4 $v6list; return }
     Set-AdapterDnsFamily $AdapterName IPv6 -ServerAddresses $v6list
-    try { Set-AdapterDnsFamily $AdapterName IPv4 -Dhcp } catch {}
+    try { Set-AdapterDnsFamily $AdapterName IPv4 -Dhcp } catch { Write-Warning ('SEDG:Set-AdapterDnsBoth: Set-AdapterDnsFamily $AdapterName IPv4 -Dhcp (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 }
 
 function Set-SecureAcl([string]$Path, [switch]$AdminOnly) {
@@ -1172,7 +1197,7 @@ function Log-Port53Owner {
                 Write-Host (('  Port 53 UDP {0} held by PID {1}' -f $u.LocalAddress, $u.OwningProcess)) -ForegroundColor DarkGray
             }
         }
-    } catch {}
+    } catch { Write-Warning ('SEDG:Log-Port53Owner: $udp = @(Get-NetUDPEndpoint -LocalPort 53 -ErrorAction Stop)... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     try {
         $tcp = @(Get-NetTCPConnection -LocalPort 53 -State Listen -ErrorAction Stop)
         foreach ($t in $tcp) {
@@ -1183,7 +1208,7 @@ function Log-Port53Owner {
                 Write-Host (('  Port 53 TCP {0} held by PID {1}' -f $t.LocalAddress, $t.OwningProcess)) -ForegroundColor DarkGray
             }
         }
-    } catch {}
+    } catch { Write-Warning ('SEDG:Log-Port53Owner: $tcp = @(Get-NetTCPConnection -LocalPort 53 -State Listen -E... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 }
 
 function Backup-DnsSettings {
@@ -1195,7 +1220,7 @@ function Backup-DnsSettings {
         foreach ($adapter in @(Get-NetworkAdapters -IncludeVirtual)) {
             try {
                 $guid = $null
-                try { $guid = [string]$adapter.InterfaceGuid } catch {}
+                try { $guid = [string]$adapter.InterfaceGuid } catch { Write-Warning ('SEDG:Backup-DnsSettings: $guid = [string]$adapter.InterfaceGuid (' + $_.Exception.Message + ')'); Write-Verbose $_ }
                 if ([string]::IsNullOrWhiteSpace($guid)) { continue }
                 $dns = @(Get-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ErrorAction Stop)
                 $v4 = @()
@@ -1205,7 +1230,7 @@ function Backup-DnsSettings {
                         $parsed = [System.Net.IPAddress]::Parse([string]$a)
                         if ($parsed.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork) { $v4 += [string]$a }
                         else { $v6 += [string]$a }
-                    } catch {}
+                    } catch { Write-Warning ('SEDG:Backup-DnsSettings: $parsed = [System.Net.IPAddress]::Parse([string]$a) if ($par... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
                 }
                 $regV4 = @(Get-StaticDnsServers $guid 'Tcpip')
                 $regV6 = @(Get-StaticDnsServers $guid 'Tcpip6')
@@ -1218,7 +1243,7 @@ function Backup-DnsSettings {
                     V4Static = $regV4
                     V6Static = $regV6
                 }
-            } catch {}
+            } catch { Write-Warning ('SEDG:Backup-DnsSettings: $guid = $null try { $guid = [string]$adapter.InterfaceGuid }... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         }
         $payload = [pscustomobject]@{
             BackedUp = (Get-Date).ToUniversalTime().ToString('o')
@@ -1230,14 +1255,14 @@ function Backup-DnsSettings {
         try {
             New-Item -ItemType Directory -Path $script:TempPath -Force | Out-Null
             $json | Set-Content -LiteralPath (Join-Path $script:TempPath 'dns-backup.json') -Encoding UTF8
-        } catch {}
+        } catch { Write-Warning ('SEDG:Backup-DnsSettings: New-Item -ItemType Directory -Path $script:TempPath -Force |... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         try {
             Set-SecureAcl $script:DnsBackupDir
             if ((-not (Test-Path -LiteralPath $script:DnsBackupSafe -PathType Leaf)) -or (-not $tainted)) {
                 $json | Set-Content -LiteralPath $script:DnsBackupSafe -Encoding UTF8
             }
-        } catch {}
-    } catch {}
+        } catch { Write-Warning ('SEDG:Backup-DnsSettings: Set-SecureAcl $script:DnsBackupDir if ((-not (Test-Path -Lit... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+    } catch { Write-Warning ('SEDG:Backup-DnsSettings: $snapshot = @() foreach ($adapter in @(Get-NetworkAdapters -... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 }
 
 function Restore-DnsSettings {
@@ -1295,16 +1320,16 @@ function Restore-DnsSettings {
                             Set-AdapterDnsFamily $adapter.Name IPv4 -Dhcp
                             Set-AdapterDnsFamily $adapter.Name IPv6 -Dhcp
                         }
-                    } catch {}
+                    } catch { Write-Warning ('SEDG:Restore-DnsSettings: if ($adapter) { Set-AdapterDnsFamily $adapter.Name IPv4 -Dhc... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
                 }
             }
         }
-    } catch {}
+    } catch { Write-Warning ('SEDG:Restore-DnsSettings: $backupPath = $null foreach ($candidate in @($script:DnsBack... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     if (-not $restoredAny) {
-        try { Reset-DnsToDhcp } catch {}
+        try { Reset-DnsToDhcp } catch { Write-Warning ('SEDG:Restore-DnsSettings: Reset-DnsToDhcp (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         return
     }
-    try { Clear-DnsClientCache; ipconfig /flushdns | Out-Null } catch {}
+    try { Clear-DnsClientCache; ipconfig /flushdns | Out-Null } catch { Write-Warning ('SEDG:Restore-DnsSettings: Clear-DnsClientCache; ipconfig /flushdns | Out-Null (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 }
 
 function Reset-DnsToDhcp {
@@ -1356,7 +1381,7 @@ function Set-LocalDns {
         $guids = @($adapters | ForEach-Object { try { [string]$_.InterfaceGuid } catch { '' } } | Where-Object { $_ })
         $st = @{ TouchedGuids = $guids; TouchedAt = (Get-Date).ToUniversalTime().ToString('o') }
         ($st | ConvertTo-Json -Depth 3) | Set-Content -LiteralPath (Join-Path $script:DnsBackupDir 'touched-adapters.json') -Encoding UTF8
-    } catch {}
+    } catch { Write-Warning ('SEDG:Set-LocalDns: $guids = @($adapters | ForEach-Object { try { [string]$_.Int... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     Write-Done 'Local DNS 127.0.0.1 enabled.'
 }
 function Set-InstallerBootstrapDns {
@@ -1367,7 +1392,7 @@ function Set-InstallerBootstrapDns {
     try {
         $manifestHost = ([uri]$script:Sources.Manifest).Host
         if (-not [string]::IsNullOrWhiteSpace($manifestHost)) { $checkHosts += $manifestHost }
-    } catch {}
+    } catch { Write-Warning ('SEDG:Set-InstallerBootstrapDns: $manifestHost = ([uri]$script:Sources.Manifest).Host if (-no... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     $checkHosts = @($checkHosts | Select-Object -Unique)
     Write-Host (('  ' + (T 'LbTarget') + ': ' + ($checkHosts -join ', '))) -ForegroundColor DarkGray
 
@@ -1651,7 +1676,7 @@ function Install-CommitComponents([hashtable]$Staged) {
                     try {
                         $preserveDriver = ((Get-FileHash -Path $liveDriver -Algorithm SHA256).Hash -eq
                             (Get-FileHash -Path $rollbackDriver -Algorithm SHA256).Hash)
-                    } catch {}
+                    } catch { Write-Warning ('SEDG:Install-CommitComponents: $preserveDriver = ((Get-FileHash -Path $liveDriver -Algorith... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
                 }
 
                 if ($preserveDriver) {
@@ -1686,14 +1711,6 @@ function Install-CommitComponents([hashtable]$Staged) {
     }
 }
 
-$script:OptionalUpstreams = [ordered]@{
-    'Taiyuan SDNS (Default)' = 'https://sdns.taiyuanwangjie.dpdns.org/dns-query'
-    'Cloudflare' = 'https://cloudflare-dns.com/dns-query'
-    'Google' = 'https://dns.google/dns-query'
-    'Quad9' = 'https://dns.quad9.net/dns-query'
-    'AdGuard' = 'https://dns.adguard-dns.com/dns-query'
-}
-
 function Get-ConfiguredUpstream {
     if (Test-Path -LiteralPath $script:ConfigFile -PathType Leaf) {
         try {
@@ -1709,14 +1726,14 @@ function Get-ConfiguredUpstream {
                     }
                 }
             }
-        } catch {}
+        } catch { Write-Warning ('SEDG:Get-ConfiguredUpstream: $lines = @(Get-Content -LiteralPath $script:ConfigFile -Erro... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     }
     if (Test-Path -LiteralPath $script:StateFile -PathType Leaf) {
         try {
             $state = Get-Content -LiteralPath $script:StateFile -Raw | ConvertFrom-Json
             $configured = [string]$state.Upstream
             if (Test-DnsUpstream $configured) { return $configured }
-        } catch {}
+        } catch { Write-Warning ('SEDG:Get-ConfiguredUpstream: $state = Get-Content -LiteralPath $script:StateFile -Raw | C... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     }
     return $script:OptionalUpstreams['Taiyuan SDNS (Default)']
 }
@@ -1779,7 +1796,7 @@ function Ensure-Config {
         return
     }
     if (-not (Test-ConfigValid)) {
-        try { Copy-Item -LiteralPath $script:ConfigFile -Destination ($script:ConfigFile + '.bak') -Force -ErrorAction Stop } catch {}
+        try { Copy-Item -LiteralPath $script:ConfigFile -Destination ($script:ConfigFile + '.bak') -Force -ErrorAction Stop } catch { Write-Warning ('SEDG:Ensure-Config: Copy-Item -LiteralPath $script:ConfigFile -Destination ($scr... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         Write-Host (('  ' + (T 'CfgInvalid'))) -ForegroundColor Yellow
         Write-OriginalConfigTemplate
         Write-Done 'DNSProxy configuration installed.'
@@ -1803,7 +1820,7 @@ function Repair-CacheKey {
         }
         Set-Content -LiteralPath $script:ConfigFile -Value $fixed -Encoding UTF8 -NoNewline
         Write-Done 'DNSProxy cache setting migrated.'
-    } catch {}
+    } catch { Write-Warning ('SEDG:Repair-CacheKey: $raw = Get-Content -LiteralPath $script:ConfigFile -Raw -Err... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 }
 function Set-UpstreamInConfig([string]$Upstream) {
     if (-not (Test-DnsUpstream $Upstream)) { throw "Unsupported DNS Upstream: $Upstream" }
@@ -1915,7 +1932,7 @@ function Get-StateReleases {
             $s = Get-Content -LiteralPath $script:StateFile -Raw | ConvertFrom-Json
             if ($s.DnsProxyRelease) { $dns = [string]$s.DnsProxyRelease }
             if ($s.ZapretRelease) { $zap = [string]$s.ZapretRelease }
-        } catch {}
+        } catch { Write-Warning ('SEDG:Get-StateReleases: $s = Get-Content -LiteralPath $script:StateFile -Raw | Conve... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     }
     return @($dns, $zap)
 }
@@ -1965,7 +1982,7 @@ function Set-Upstream([string]$SelectedUpstream = $null) {
         Write-State $rel[0] $rel[1] $SelectedUpstream
     } catch {
         $origErr = $_.Exception.Message
-        try { Restart-DnsProxyService 'DNSProxy did not remain running after upstream change.' } catch {}
+        try { Restart-DnsProxyService 'DNSProxy did not remain running after upstream change.' } catch { Write-Warning ('SEDG:Set-Upstream: Restart-DnsProxyService ''DNSProxy did not remain running aft... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         throw $origErr
     }
     Restart-DnsProxyService 'DNSProxy did not remain running after upstream change.'
@@ -2020,7 +2037,7 @@ function Get-DefaultWinwsArgs {
         $tpl = '--wf-tcp=80,443 --wf-udp=443 --hostlist="{0}" --dpi-desync=fake,disorder2 --dpi-desync-fooling=badseq --dpi-desync-repeats=6'
     }
     $listPath = 'blacklist.txt'
-    try { $listPath = Join-Path $script:ZapretPath 'blacklist.txt' } catch {}
+    try { $listPath = Join-Path $script:ZapretPath 'blacklist.txt' } catch { Write-Warning ('SEDG:Get-DefaultWinwsArgs: $listPath = Join-Path $script:ZapretPath ''blacklist.txt'' (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     if ([string]::IsNullOrWhiteSpace([string]$listPath)) { $listPath = 'blacklist.txt' }
     return ($tpl -f $listPath)
 }
@@ -2038,7 +2055,7 @@ function Get-WinwsParameters {
                 return $line[0].Trim()
             }
         }
-    } catch {}
+    } catch { Write-Warning ('SEDG:Get-WinwsParameters: if (Test-Path -LiteralPath $script:WinwsArgsFile -PathType L... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     return (Get-DefaultWinwsArgs)
 }
 
@@ -2092,7 +2109,7 @@ function Get-GatewayAdapters {
             $all = @(Get-DnsClientServerAddress -InterfaceIndex $a.ifIndex -ErrorAction Stop |
                 Select-Object -ExpandProperty ServerAddresses)
             if (($all -contains '127.0.0.1') -or ($all -contains '::1')) { $a }
-        } catch {}
+        } catch { Write-Warning ('SEDG:Get-GatewayAdapters: $all = @(Get-DnsClientServerAddress -InterfaceIndex $a.ifInd... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     }
 }
 
@@ -2105,14 +2122,14 @@ function Set-DnsLocal($AdapterName, [int]$IfIndex) {
     try {
         Set-DnsClientServerAddress -InterfaceIndex $IfIndex -ServerAddresses @('127.0.0.1', '::1') -ErrorAction Stop
     } catch {
-        try { Set-DnsClientServerAddress -InterfaceIndex $IfIndex -ServerAddresses @('127.0.0.1') -ErrorAction Stop } catch {}
-        try { & netsh.exe interface ipv6 set dnsservers "name=$AdapterName" source=dhcp validate=no 2>$null | Out-Null } catch {}
+        try { Set-DnsClientServerAddress -InterfaceIndex $IfIndex -ServerAddresses @('127.0.0.1') -ErrorAction Stop } catch { Write-Warning ('SEDG:Set-DnsLocal: Set-DnsClientServerAddress -InterfaceIndex $IfIndex -ServerA... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        try { & netsh.exe interface ipv6 set dnsservers "name=$AdapterName" source=dhcp validate=no 2>$null | Out-Null } catch { Write-Warning ('SEDG:Set-DnsLocal: & netsh.exe interface ipv6 set dnsservers "name=$AdapterName... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     }
 }
 
 function Reset-ResolverCache {
-    try { Clear-DnsClientCache } catch {}
-    try { ipconfig /flushdns 2>$null | Out-Null } catch {}
+    try { Clear-DnsClientCache } catch { Write-Warning ('SEDG:Reset-ResolverCache: Clear-DnsClientCache (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+    try { ipconfig /flushdns 2>$null | Out-Null } catch { Write-Warning ('SEDG:Reset-ResolverCache: ipconfig /flushdns 2>$null | Out-Null (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 }
 
 if (-not (Test-Path -LiteralPath $EnabledFile -PathType Leaf)) { exit 0 }
@@ -2129,15 +2146,15 @@ foreach ($svcName in @($WinwsService, $DnsProxyService)) {
         $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
         if ($svc -and ($svc.Status -ne 'Running')) {
             $auto = $true
-            try { $auto = ($svc.StartType -eq 'Automatic') } catch {}
+            try { $auto = ($svc.StartType -eq 'Automatic') } catch { Write-Warning ('SEDG:Watchdog: $auto = ($svc.StartType -eq ''Automatic'') (' + $_.Exception.Message + ')'); Write-Verbose $_ }
             if ($auto) {
-                try { Start-Service -Name $svcName -ErrorAction Stop } catch {}
+                try { Start-Service -Name $svcName -ErrorAction Stop } catch { Write-Warning ('SEDG:Watchdog: Start-Service -Name $svcName -ErrorAction Stop (' + $_.Exception.Message + ')'); Write-Verbose $_ }
                 $restarted = $true
             }
         }
-    } catch {}
+    } catch { Write-Warning ('SEDG:Watchdog: $svc = Get-Service -Name $svcName -ErrorAction SilentlyConti... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 }
-if ($restarted) { try { Start-Sleep -Seconds 10 } catch {} }
+if ($restarted) { try { Start-Sleep -Seconds 10 } catch { Write-Warning ('SEDG:Watchdog: Start-Sleep -Seconds 10 (' + $_.Exception.Message + ')'); Write-Verbose $_ } }
 
 $upstreamHost = $null
 try {
@@ -2145,7 +2162,7 @@ try {
         $u = [string](Get-Content -LiteralPath $StateFile -Raw -ErrorAction Stop | ConvertFrom-Json).Upstream
         $upstreamHost = ([uri]$u).Host
     }
-} catch {}
+} catch { Write-Warning ('SEDG:Watchdog: if (Test-Path -LiteralPath $StateFile -PathType Leaf) { $u =... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 $targets = @()
 if (-not [string]::IsNullOrWhiteSpace($upstreamHost)) { $targets += $upstreamHost }
 $targets += @('dns.google', 'one.one.one.one')
@@ -2156,33 +2173,33 @@ foreach ($t in $targets) {
     try {
         $r = Resolve-DnsName -Name $t -Server 127.0.0.1 -DnsOnly -QuickTimeout -ErrorAction Stop
         if ($r) { $healthy = $true; break }
-    } catch {}
+    } catch { Write-Warning ('SEDG:Watchdog: $r = Resolve-DnsName -Name $t -Server 127.0.0.1 -DnsOnly -Qu... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 }
 
 if ($healthy) {
-    try { Remove-Item -LiteralPath $CountFile -Force -ErrorAction SilentlyContinue } catch {}
+    try { Remove-Item -LiteralPath $CountFile -Force -ErrorAction SilentlyContinue } catch { Write-Warning ('SEDG:Watchdog: Remove-Item -LiteralPath $CountFile -Force -ErrorAction Sile... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     if ($failedOver) {
         foreach ($a in @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' })) {
             Set-DnsLocal $a.Name $a.ifIndex
         }
         Reset-ResolverCache
-        try { Remove-Item -LiteralPath $FlagFile -Force -ErrorAction SilentlyContinue } catch {}
+        try { Remove-Item -LiteralPath $FlagFile -Force -ErrorAction SilentlyContinue } catch { Write-Warning ('SEDG:Watchdog: Remove-Item -LiteralPath $FlagFile -Force -ErrorAction Silen... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     } else {
         foreach ($a in @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' })) {
             try {
                 $all = @(Get-DnsClientServerAddress -InterfaceIndex $a.ifIndex -ErrorAction Stop | Select-Object -ExpandProperty ServerAddresses)
                 if (($all -contains '127.0.0.1') -or ($all -contains '::1')) { continue }
                 if ($all.Count -eq 0) { Set-DnsLocal $a.Name $a.ifIndex }
-            } catch {}
+            } catch { Write-Warning ('SEDG:Watchdog: $all = @(Get-DnsClientServerAddress -InterfaceIndex $a.ifInd... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         }
     }
     exit 0
 }
 
 $n = 0
-try { $n = [int](Get-Content -LiteralPath $CountFile -Raw -ErrorAction Stop) } catch {}
+try { $n = [int](Get-Content -LiteralPath $CountFile -Raw -ErrorAction Stop) } catch { Write-Warning ('SEDG:Watchdog: $n = [int](Get-Content -LiteralPath $CountFile -Raw -ErrorAc... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 $n++
-try { $n | Set-Content -LiteralPath $CountFile -Encoding ASCII -NoNewline -Force } catch {}
+try { $n | Set-Content -LiteralPath $CountFile -Encoding ASCII -NoNewline -Force } catch { Write-Warning ('SEDG:Watchdog: $n | Set-Content -LiteralPath $CountFile -Encoding ASCII -No... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 if ($n -ge 3) {
     # M6 fail-closed: with the marker present the gateway stays on local DNS
     # (no traffic leaks to the ISP) instead of falling back to DHCP.
@@ -2191,7 +2208,7 @@ if ($n -ge 3) {
             Set-DnsDhcp $a.Name
         }
         Reset-ResolverCache
-        try { 'fallback' | Set-Content -LiteralPath $FlagFile -Encoding ASCII -NoNewline -Force } catch {}
+        try { 'fallback' | Set-Content -LiteralPath $FlagFile -Encoding ASCII -NoNewline -Force } catch { Write-Warning ('SEDG:Watchdog: ''fallback'' | Set-Content -LiteralPath $FlagFile -Encoding AS... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     }
 }
 exit 0
@@ -2202,7 +2219,7 @@ exit 0
 
 function Clear-WatchdogState {
     foreach ($f in @($script:WatchdogFlag, $script:WatchdogCount)) {
-        try { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue } catch {}
+        try { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue } catch { Write-Warning ('SEDG:Clear-WatchdogState: Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyCont... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     }
 }
 
@@ -2210,7 +2227,7 @@ function Set-GatewayEnabled([bool]$Enabled) {
     try {
         if ($Enabled) { 'enabled' | Set-Content -LiteralPath $script:GatewayFlag -Encoding ASCII -NoNewline -Force }
         else { Remove-Item -LiteralPath $script:GatewayFlag -Force -ErrorAction SilentlyContinue }
-    } catch {}
+    } catch { Write-Warning ('SEDG:Set-GatewayEnabled: if ($Enabled) { ''enabled'' | Set-Content -LiteralPath $script... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 }
 
 function Install-Watchdog {
@@ -2220,7 +2237,7 @@ function Install-Watchdog {
     # -FailClosed is sticky across Install/Update (never auto-downgraded).
     # Delete the marker file (or Uninstall) to return to DHCP fallback.
     if ($FailClosed) {
-        try { 'fail-closed' | Set-Content -LiteralPath $script:FailClosedFile -Encoding ASCII -NoNewline -Force } catch {}
+        try { 'fail-closed' | Set-Content -LiteralPath $script:FailClosedFile -Encoding ASCII -NoNewline -Force } catch { Write-Warning ('SEDG:Install-Watchdog: ''fail-closed'' | Set-Content -LiteralPath $script:FailClosedF... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     }
     $taskAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -ExecutionPolicy Bypass -File "' + $script:WatchdogScript + '"')
     # Boot fix: AtStartup heals the first minutes after reboot (when a
@@ -2256,7 +2273,7 @@ function Remove-Services {
 
         try {
             Stop-Service -Name $name -Force -ErrorAction SilentlyContinue
-        } catch {}
+        } catch { Write-Warning ('SEDG:Remove-Services: Stop-Service -Name $name -Force -ErrorAction SilentlyContinu... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 
         # NSSM owns these services. Use NSSM removal when the pinned binary
         # is available; fall back to sc.exe for recovery/partial installs.
@@ -2264,7 +2281,7 @@ function Remove-Services {
             try {
                 & $script:NssmPath remove $name confirm 2>$null | Out-Null
                 if ($LASTEXITCODE -eq 0) { continue }
-            } catch {}
+            } catch { Write-Warning ('SEDG:Remove-Services: & $script:NssmPath remove $name confirm 2>$null | Out-Null i... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         }
 
         & sc.exe delete $name 2>$null | Out-Null
@@ -2291,7 +2308,7 @@ function Remove-Services {
         throw "Timed out waiting for services to be removed: $names"
     }
 
-    try { Unregister-ScheduledTask -TaskName $script:WatchdogTask -Confirm:$false -ErrorAction Stop } catch {}
+    try { Unregister-ScheduledTask -TaskName $script:WatchdogTask -Confirm:$false -ErrorAction Stop } catch { Write-Warning ('SEDG:Remove-Services: Unregister-ScheduledTask -TaskName $script:WatchdogTask -Con... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 
     Write-Done 'Existing Windows services removed.'
 }
@@ -2340,7 +2357,7 @@ function Create-Services {
     # boot. Early crashes self-heal via NSSM AppExit/SCM recovery below.
     sc.exe config $script:DnsProxyService depend= Tcpip 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Failed to configure dependency for $($script:DnsProxyService)." }
-    try { sc.exe config $script:DnsProxyService start= auto 2>$null | Out-Null } catch {}
+    try { sc.exe config $script:DnsProxyService start= auto 2>$null | Out-Null } catch { Write-Warning ('SEDG:Create-Services: sc.exe config $script:DnsProxyService start= auto 2>$null | ... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     # M10: least privilege. dnsproxy only binds 127.0.0.1:53, so prefer
     # LocalService; fall back to SYSTEM when the host refuses.
     # Boot fix: the install dir is admin-only (SYSTEM+Admin), so grant
@@ -2351,16 +2368,16 @@ function Create-Services {
         & icacls.exe $script:InstallPath /grant '*S-1-5-19:(OI)(CI)RX' | Out-Null
         & icacls.exe $script:DnsProxyPath /grant '*S-1-5-19:(OI)(CI)M' | Out-Null
         Invoke-Nssm @('set', $script:DnsProxyService, 'ObjectName', 'NT AUTHORITY\LocalService', '')
-    } catch {}
+    } catch { Write-Warning ('SEDG:Create-Services: & icacls.exe $script:InstallPath /grant ''*S-1-5-19:(OI)(CI)R... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     # Boot resilience: restart the wrapper when the app exits early
     # (port race, network not ready). Without this SCM leaves the
     # service Stopped after reboot and DNS 127.0.0.1 goes dark.
     foreach ($svcName in @($script:WinwsService, $script:DnsProxyService)) {
-        try { Invoke-Nssm @('set', $svcName, 'AppExit', 'Default', 'Restart') } catch {}
-        try { Invoke-Nssm @('set', $svcName, 'AppRestartDelay', '5000') } catch {}
-        try { Invoke-Nssm @('set', $svcName, 'AppThrottle', '5000') } catch {}
-        try { & sc.exe failure $svcName reset= 86400 actions= restart/5000/restart/10000/restart/30000 2>$null | Out-Null } catch {}
-        try { & sc.exe failureflag $svcName 1 2>$null | Out-Null } catch {}
+        try { Invoke-Nssm @('set', $svcName, 'AppExit', 'Default', 'Restart') } catch { Write-Warning ('SEDG:Create-Services: Invoke-Nssm @(''set'', $svcName, ''AppExit'', ''Default'', ''Restar... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        try { Invoke-Nssm @('set', $svcName, 'AppRestartDelay', '5000') } catch { Write-Warning ('SEDG:Create-Services: Invoke-Nssm @(''set'', $svcName, ''AppRestartDelay'', ''5000'') (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        try { Invoke-Nssm @('set', $svcName, 'AppThrottle', '5000') } catch { Write-Warning ('SEDG:Create-Services: Invoke-Nssm @(''set'', $svcName, ''AppThrottle'', ''5000'') (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        try { & sc.exe failure $svcName reset= 86400 actions= restart/5000/restart/10000/restart/30000 2>$null | Out-Null } catch { Write-Warning ('SEDG:Create-Services: & sc.exe failure $svcName reset= 86400 actions= restart/5000... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        try { & sc.exe failureflag $svcName 1 2>$null | Out-Null } catch { Write-Warning ('SEDG:Create-Services: & sc.exe failureflag $svcName 1 2>$null | Out-Null (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     }
 
     foreach ($name in @($script:WinwsService, $script:DnsProxyService)) {
@@ -2382,7 +2399,7 @@ function Get-ManagerSourceContent {
             $fileContent = Get-Content -LiteralPath $script:SelfPath -Raw -ErrorAction Stop
             if ($fileContent -match 'InstallerVersion') { return $fileContent }
         }
-    } catch {}
+    } catch { Write-Warning ('SEDG:Get-ManagerSourceContent: if (-not [string]::IsNullOrWhiteSpace($script:SelfPath) -and... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     $distBase = $script:Sources.Manifest -replace '/approved-releases\.json$', ''
     if ([string]::IsNullOrWhiteSpace($distBase)) { throw 'Cannot determine distribution base URL.' }
     $ver = Invoke-RestMethod -Uri ($distBase + '/version.json') -Headers @{ 'User-Agent' = 'Serverless-Edge-DNS-Gateway-Installer' } -TimeoutSec 30 -ErrorAction Stop
@@ -2460,7 +2477,7 @@ function Test-DnsProxyListeners {
         if (-not ($udp6 -and $tcp6)) {
             Write-Host (('  ' + (Get-ViInfo 'Local DNS IPv6 ::1: not listening.'))) -ForegroundColor Yellow
         }
-    } catch {}
+    } catch { Write-Warning ('SEDG:Test-DnsProxyListeners: $udp6 = @($udp | Where-Object { [string]$_.LocalAddress -eq ... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 }
 function Write-State([string]$DnsProxyRelease, [string]$ZapretRelease, [string]$Upstream = $null) {
     if ([string]::IsNullOrWhiteSpace($Upstream)) { $Upstream = Get-ConfiguredUpstream }
@@ -2480,7 +2497,7 @@ function Remove-InstallDirectoryCleanly([string]$Path, [switch]$AllowSchedule) {
     try {
         Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
         return
-    } catch {}
+    } catch { Write-Warning ('SEDG:Remove-InstallDirectoryCleanly: Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction ... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     # H3: schedule-on-reboot is only allowed for Uninstall. Install/Update must
     # fail loudly so a new driver is never deleted by a pending reboot entry.
     if (-not $AllowSchedule) {
@@ -2490,14 +2507,14 @@ function Remove-InstallDirectoryCleanly([string]$Path, [switch]$AllowSchedule) {
     # Schedule locked drivers for reboot removal and clear everything else
     # so a fresh install can proceed without aborting mid-delete.
     Write-Host (('  ' + (T 'WarnDirBlocked'))) -ForegroundColor Yellow
-    try { Schedule-DeleteOnReboot (Join-Path $script:ZapretPath 'WinDivert64.sys') } catch {}
+    try { Schedule-DeleteOnReboot (Join-Path $script:ZapretPath 'WinDivert64.sys') } catch { Write-Warning ('SEDG:Remove-InstallDirectoryCleanly: Schedule-DeleteOnReboot (Join-Path $script:ZapretPath ''WinDi... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue | ForEach-Object {
         $item = $_
         try {
             Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction Stop
         } catch {
             if ($item.FullName -like '*WinDivert*.sys') {
-                try { Schedule-DeleteOnReboot $item.FullName } catch {}
+                try { Schedule-DeleteOnReboot $item.FullName } catch { Write-Warning ('SEDG:Remove-InstallDirectoryCleanly: Schedule-DeleteOnReboot $item.FullName (' + $_.Exception.Message + ')'); Write-Verbose $_ }
                 Write-Host (('  ' + ((T 'WarnDriverKept') -f $item.FullName))) -ForegroundColor Yellow
                 Write-Host (('  ' + (T 'WarnRebootRequired'))) -ForegroundColor Yellow
             } else {
@@ -2562,8 +2579,8 @@ function Install-All {
     # H2: reinstall routes through the safer Update path unless -Clean.
     if ((Test-Path -LiteralPath $script:InstallPath) -and (-not $Clean)) {
         Write-Host '  Existing installation found; routing to Update path.' -ForegroundColor Yellow
-        try { Exit-InstallerMutex } catch {}
-        try { Stop-OpTranscript } catch {}
+        try { Exit-InstallerMutex } catch { Write-Warning ('SEDG:Install-All: Exit-InstallerMutex (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        try { Stop-OpTranscript } catch { Write-Warning ('SEDG:Install-All: Stop-OpTranscript (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         $script:InstallerMutex = $null; $script:MutexDepth = 0; $script:OpTranscript = $null
         Update-All
         return
@@ -2579,7 +2596,7 @@ function Install-All {
         $staged = Install-StageComponents
         if (-not $staged) { throw 'Component staging failed.' }
     } catch {
-        try { Restore-DnsSettings } catch {}
+        try { Restore-DnsSettings } catch { Write-Warning ('SEDG:Install-All: Restore-DnsSettings (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         throw
     }
 
@@ -2608,12 +2625,12 @@ function Install-All {
             # H3: no schedule-on-reboot here; locked driver aborts the install.
             if (Test-Path $script:ZapretPath) { Remove-OwnWinDivertDriver }
             $oldDir = $script:InstallPath + '-old'
-            try { Remove-Item -LiteralPath $oldDir -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+            try { Remove-Item -LiteralPath $oldDir -Recurse -Force -ErrorAction SilentlyContinue } catch { Write-Warning ('SEDG:Install-All: Remove-Item -LiteralPath $oldDir -Recurse -Force -ErrorActio... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
             try {
                 Rename-Item -LiteralPath $script:InstallPath -NewName (Split-Path -Leaf $oldDir) -ErrorAction Stop
             } catch {
-                try { Start-AllServices } catch {}
-                try { Restore-DnsSettings } catch {}
+                try { Start-AllServices } catch { Write-Warning ('SEDG:Install-All: Start-AllServices (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+                try { Restore-DnsSettings } catch { Write-Warning ('SEDG:Install-All: Restore-DnsSettings (' + $_.Exception.Message + ')'); Write-Verbose $_ }
                 throw 'Install directory is locked. Reboot Windows, then retry with -Clean.'
             }
             try {
@@ -2670,7 +2687,7 @@ function Install-All {
                 Remove-Item -LiteralPath $dnsLog -Force -ErrorAction SilentlyContinue
             }
             New-Item -ItemType File -Path $dnsLog -Force | Out-Null
-        } catch {}
+        } catch { Write-Warning ('SEDG:Install-All: if ((Test-Path -LiteralPath $dnsLog) -and ((Get-Item -Litera... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         Create-Services
         Write-Manager
         Install-Watchdog
@@ -2680,21 +2697,21 @@ function Install-All {
         Test-DnsProxyListeners
         Set-LocalDns
         Write-State $staged.DnsRelease $staged.ZapRelease
-        try { $oldLeft = $script:InstallPath + '-old'; Remove-Item -LiteralPath $oldLeft -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+        try { $oldLeft = $script:InstallPath + '-old'; Remove-Item -LiteralPath $oldLeft -Recurse -Force -ErrorAction SilentlyContinue } catch { Write-Warning ('SEDG:Install-All: $oldLeft = $script:InstallPath + ''-old''; Remove-Item -Litera... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         Remove-Item -LiteralPath $script:TempPath -Recurse -Force -ErrorAction SilentlyContinue
     } catch {
         # A failed install must not leave a half-created service behind.
-        try { Stop-AllServices } catch {}
-        try { Remove-Services } catch {}
-        try { Restore-DnsSettings } catch {}
+        try { Stop-AllServices } catch { Write-Warning ('SEDG:Install-All: Stop-AllServices (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        try { Remove-Services } catch { Write-Warning ('SEDG:Install-All: Remove-Services (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        try { Restore-DnsSettings } catch { Write-Warning ('SEDG:Install-All: Restore-DnsSettings (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         throw
     }
 
     Write-Host ''
     Show-InstallSummary
     } finally {
-        try { Stop-OpTranscript } catch {}
-        try { Exit-InstallerMutex } catch {}
+        try { Stop-OpTranscript } catch { Write-Warning ('SEDG:Install-All: Stop-OpTranscript (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        try { Exit-InstallerMutex } catch { Write-Warning ('SEDG:Install-All: Exit-InstallerMutex (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     }
 }
 
@@ -2707,8 +2724,8 @@ function Update-All {
     Write-CreditBanner
     Clear-StaleTempInstallers
     if (-not (Test-Path $script:InstallPath)) {
-        try { Exit-InstallerMutex } catch {}
-        try { Stop-OpTranscript } catch {}
+        try { Exit-InstallerMutex } catch { Write-Warning ('SEDG:Update-All: Exit-InstallerMutex (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        try { Stop-OpTranscript } catch { Write-Warning ('SEDG:Update-All: Stop-OpTranscript (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         $script:InstallerMutex = $null; $script:MutexDepth = 0; $script:OpTranscript = $null
         Install-All
         return
@@ -2747,7 +2764,7 @@ function Update-All {
             $staged = Install-StageComponents
             if (-not $staged) { throw 'Component staging failed.' }
         } catch {
-            try { Restore-DnsSettings } catch {}
+            try { Restore-DnsSettings } catch { Write-Warning ('SEDG:Update-All: Restore-DnsSettings (' + $_.Exception.Message + ')'); Write-Verbose $_ }
             throw
         }
     }
@@ -2815,8 +2832,8 @@ function Update-All {
         throw
     }
     } finally {
-        try { Stop-OpTranscript } catch {}
-        try { Exit-InstallerMutex } catch {}
+        try { Stop-OpTranscript } catch { Write-Warning ('SEDG:Update-All: Stop-OpTranscript (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        try { Exit-InstallerMutex } catch { Write-Warning ('SEDG:Update-All: Exit-InstallerMutex (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     }
 }
 
@@ -2826,7 +2843,7 @@ function Pause-All {
     Write-Title ('Serverless Edge DNS Gateway with Zapret DPI Bypass - Auto Installer - ' + (T 'MiPause'))
     if (-not (Test-Path $script:InstallPath)) { throw (T 'NotFound') }
     Stop-AllServices
-    try { Reset-DnsToDhcp } catch { try { Restore-DnsSettings } catch {}; throw }
+    try { Reset-DnsToDhcp } catch { try { Restore-DnsSettings } catch { Write-Warning ('SEDG:Pause-All: Restore-DnsSettings (' + $_.Exception.Message + ')'); Write-Verbose $_ }; throw }
     Set-GatewayEnabled $false
     Clear-WatchdogState
     Write-Host (T 'PauseDone') -ForegroundColor Green
@@ -2846,8 +2863,8 @@ function Resume-All {
         Set-LocalDns
     } catch {
         $origErr = $_.Exception.Message
-        try { Stop-AllServices } catch {}
-        try { Reset-DnsToDhcp } catch {}
+        try { Stop-AllServices } catch { Write-Warning ('SEDG:Resume-All: Stop-AllServices (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        try { Reset-DnsToDhcp } catch { Write-Warning ('SEDG:Resume-All: Reset-DnsToDhcp (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         throw $origErr
     }
     Set-GatewayEnabled $true
@@ -2869,8 +2886,8 @@ function Restart-All {
         Set-LocalDns
     } catch {
         $origErr = $_.Exception.Message
-        try { Stop-AllServices } catch {}
-        try { Reset-DnsToDhcp } catch {}
+        try { Stop-AllServices } catch { Write-Warning ('SEDG:Restart-All: Stop-AllServices (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        try { Reset-DnsToDhcp } catch { Write-Warning ('SEDG:Restart-All: Reset-DnsToDhcp (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         throw $origErr
     }
     Write-Host (T 'RestartDone') -ForegroundColor Green
@@ -2890,12 +2907,12 @@ function Uninstall-All {
     Write-Title ('Serverless Edge DNS Gateway with Zapret DPI Bypass - Auto Installer - ' + (T 'MiUninstall'))
     Write-Step 'Stopping services and restoring DNS...'
     Stop-AllServices
-    try { Restore-DnsSettings } catch {}
+    try { Restore-DnsSettings } catch { Write-Warning ('SEDG:Uninstall-All: Restore-DnsSettings (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     try {
         if (Test-Path -LiteralPath $script:DnsBackupSafe -PathType Leaf) {
             Remove-Item -LiteralPath $script:DnsBackupSafe -Force -ErrorAction SilentlyContinue
         }
-    } catch {}
+    } catch { Write-Warning ('SEDG:Uninstall-All: if (Test-Path -LiteralPath $script:DnsBackupSafe -PathType L... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     Set-GatewayEnabled $false
     Clear-WatchdogState
     Remove-Services
@@ -2926,20 +2943,20 @@ function Uninstall-All {
     }
     }
     if ($Purge) {
-        try { Remove-Item -LiteralPath (Join-Path $script:DnsBackupDir 'logs') -Recurse -Force -ErrorAction SilentlyContinue } catch {}
-        try { Remove-Item -LiteralPath $script:LangFile -Force -ErrorAction SilentlyContinue } catch {}
-        try { Remove-Item -LiteralPath (Join-Path $script:DnsBackupDir 'touched-adapters.json') -Force -ErrorAction SilentlyContinue } catch {}
-        try { Remove-Item -LiteralPath $script:TempPath -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+        try { Remove-Item -LiteralPath (Join-Path $script:DnsBackupDir 'logs') -Recurse -Force -ErrorAction SilentlyContinue } catch { Write-Warning ('SEDG:Uninstall-All: Remove-Item -LiteralPath (Join-Path $script:DnsBackupDir ''lo... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        try { Remove-Item -LiteralPath $script:LangFile -Force -ErrorAction SilentlyContinue } catch { Write-Warning ('SEDG:Uninstall-All: Remove-Item -LiteralPath $script:LangFile -Force -ErrorActio... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        try { Remove-Item -LiteralPath (Join-Path $script:DnsBackupDir 'touched-adapters.json') -Force -ErrorAction SilentlyContinue } catch { Write-Warning ('SEDG:Uninstall-All: Remove-Item -LiteralPath (Join-Path $script:DnsBackupDir ''to... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        try { Remove-Item -LiteralPath $script:TempPath -Recurse -Force -ErrorAction SilentlyContinue } catch { Write-Warning ('SEDG:Uninstall-All: Remove-Item -LiteralPath $script:TempPath -Recurse -Force -E... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         try {
             if ((Test-Path -LiteralPath $script:DnsBackupDir -PathType Container) -and
                 (-not (Get-ChildItem -LiteralPath $script:DnsBackupDir -Force -ErrorAction Stop | Select-Object -First 1))) {
                 Remove-Item -LiteralPath $script:DnsBackupDir -Force -ErrorAction SilentlyContinue
             }
-        } catch {}
+        } catch { Write-Warning ('SEDG:Uninstall-All: if ((Test-Path -LiteralPath $script:DnsBackupDir -PathType C... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     }
     } finally {
-        try { Stop-OpTranscript } catch {}
-        try { Exit-InstallerMutex } catch {}
+        try { Stop-OpTranscript } catch { Write-Warning ('SEDG:Uninstall-All: Stop-OpTranscript (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        try { Exit-InstallerMutex } catch { Write-Warning ('SEDG:Uninstall-All: Exit-InstallerMutex (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     }
 }
 
@@ -2951,7 +2968,7 @@ function Get-LocalDnsV4AdapterNames {
             $v4 = @($dns | Where-Object { $_.AddressFamily -eq 2 } | Select-Object -ExpandProperty ServerAddresses)
             if ($v4 -contains '127.0.0.1') { $names += $adapter.Name }
         }
-    } catch {}
+    } catch { Write-Warning ('SEDG:Get-LocalDnsV4AdapterNames: foreach ($adapter in (Get-NetworkAdapters -IncludeVirtual)) ... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     return $names
 }
 
@@ -2974,9 +2991,9 @@ function Show-Status {
             if ($state.DnsProxyRelease) { $dnsRelease = [string]$state.DnsProxyRelease }
             if ($state.ZapretRelease) { $zapretRelease = [string]$state.ZapretRelease }
             if ($state.Updated) {
-                try { $updated = [DateTimeOffset]::Parse([string]$state.Updated) } catch {}
+                try { $updated = [DateTimeOffset]::Parse([string]$state.Updated) } catch { Write-Warning ('SEDG:Show-Status: $updated = [DateTimeOffset]::Parse([string]$state.Updated) (' + $_.Exception.Message + ')'); Write-Verbose $_ }
             }
-        } catch {}
+        } catch { Write-Warning ('SEDG:Show-Status: $state = Get-Content -LiteralPath $script:StateFile -Raw | C... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     }
 
     $winwsRunning = $winwsService -and $winwsService.Status -eq 'Running'
@@ -2988,7 +3005,7 @@ function Show-Status {
     try {
         $u = Get-ConfiguredUpstream
         if (Test-DnsUpstream $u) { $upstreamShown = $u; $upstreamOk = $true }
-    } catch {}
+    } catch { Write-Warning ('SEDG:Show-Status: $u = Get-ConfiguredUpstream if (Test-DnsUpstream $u) { $upst... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     $configExists = Test-Path -LiteralPath $script:ConfigFile
 
     Write-Section (T 'StInstall')
@@ -3090,7 +3107,7 @@ function Test-CDNOptimization {
         if (-not [string]::IsNullOrWhiteSpace($geo.asn_organization)) {
             $isp = $geo.asn_organization
         }
-    } catch {}
+    } catch { Write-Warning ('SEDG:Test-CDNOptimization: $geo = Invoke-RestMethod -Uri ''https://api.ip.sb/geoip'' -Hea... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 
     Write-Host ''
     Write-Host (((T 'CdnLoc') -f $location)) -ForegroundColor Cyan
@@ -3130,7 +3147,7 @@ function Test-CDNOptimization {
             $ping = Test-Connection -ComputerName $target.Domain -Count 1 -ErrorAction Stop
             # Low: PS7 renamed ResponseTime to Latency.
             $ms = $ping.ResponseTime
-            if ($null -eq $ms) { try { $ms = $ping.Latency } catch {} }
+            if ($null -eq $ms) { try { $ms = $ping.Latency } catch { Write-Warning ('SEDG:Test-CDNOptimization: $ms = $ping.Latency (' + $_.Exception.Message + ')'); Write-Verbose $_ } }
 
             $cdnLoc = $null
             if ($ipCache.ContainsKey($resolvedIP)) { $cdnLoc = $ipCache[$resolvedIP] }
@@ -3175,7 +3192,7 @@ function Show-InstallSummary {
         $sumUp = Get-ConfiguredUpstream
         Write-Host ("  DNSProxy {0} | Zapret {1}" -f $sumRel[0], $sumRel[1]) -ForegroundColor DarkGray
         Write-Host ('  ' + (T 'MnUpstream') + ': ' + $sumUp) -ForegroundColor DarkGray
-    } catch {}
+    } catch { Write-Warning ('SEDG:Show-InstallSummary: $sumRel = Get-StateReleases $sumUp = Get-ConfiguredUpstream ... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     Write-Host ('  ' + (T 'SumHint')) -ForegroundColor DarkGray
     Write-Host ""
     Show-ServiceTests
@@ -3282,8 +3299,8 @@ function Show-Menu {
             Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
         }
         # M2: release mutex/transcript between menu actions.
-        try { Stop-OpTranscript } catch {}
-        try { Exit-InstallerMutex } catch {}
+        try { Stop-OpTranscript } catch { Write-Warning ('SEDG:Show-Menu: Stop-OpTranscript (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        try { Exit-InstallerMutex } catch { Write-Warning ('SEDG:Show-Menu: Exit-InstallerMutex (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         $script:OpTranscript = $null
 
         if ($choice -ne '0') {
@@ -3313,13 +3330,13 @@ try {
     Write-Host ("ERROR: " + $_.Exception.Message) -ForegroundColor Red
     $script:ExitCode = 1
 } finally {
-    try { Stop-OpTranscript } catch {}
-    try { Exit-InstallerMutex } catch {}
+    try { Stop-OpTranscript } catch { Write-Warning ('SEDG:script: Stop-OpTranscript (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+    try { Exit-InstallerMutex } catch { Write-Warning ('SEDG:script: Exit-InstallerMutex (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     # M5: restore host preferences polluted by irm|iex.
-    try { $ErrorActionPreference = $script:SavedErrorAction } catch {}
-    try { $ProgressPreference = $script:SavedProgress } catch {}
-    try { if ($null -ne $script:SavedSecurityProtocol) { [Net.ServicePointManager]::SecurityProtocol = $script:SavedSecurityProtocol } } catch {}
-    try { if ($null -ne $script:SavedOutputEncoding) { [Console]::OutputEncoding = $script:SavedOutputEncoding } catch {} } catch {}
+    try { $ErrorActionPreference = $script:SavedErrorAction } catch { Write-Warning ('SEDG:script: $ErrorActionPreference = $script:SavedErrorAction (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+    try { $ProgressPreference = $script:SavedProgress } catch { Write-Warning ('SEDG:script: $ProgressPreference = $script:SavedProgress (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+    try { if ($null -ne $script:SavedSecurityProtocol) { [Net.ServicePointManager]::SecurityProtocol = $script:SavedSecurityProtocol } } catch { Write-Warning ('SEDG:script: if ($null -ne $script:SavedSecurityProtocol) { [Net.ServiceP... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+    try { if ($null -ne $script:SavedOutputEncoding) { [Console]::OutputEncoding = $script:SavedOutputEncoding } } catch { Write-Warning ('SEDG:script: if ($null -ne $script:SavedOutputEncoding) { [Console]::Outp... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 }
 
 # Keep a one-shot elevated window open for reading. Menu pauses itself;
@@ -3334,6 +3351,6 @@ try {
     if ($script:SelfPath -like (Join-Path $env:TEMP 'serverless-edge-dns-gateway-installer-*.ps1')) {
         Remove-Item -LiteralPath $script:SelfPath -Force -ErrorAction SilentlyContinue
     }
-} catch {}
+} catch { Write-Warning ('SEDG:script: if ($script:SelfPath -like (Join-Path $env:TEMP ''serverless-... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 
 if ($script:ExitCode -ne 0) { Exit-Installer $script:ExitCode }

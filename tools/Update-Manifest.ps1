@@ -107,7 +107,7 @@ try {
     try {
         $mirrorProp = $n.PSObject.Properties['mirror']
         if ($null -ne $mirrorProp) { $existingMirror = [string]$mirrorProp.Value }
-    } catch {}
+    } catch { Write-Warning ('SEDG:Update-Manifest: $mirrorProp = $n.PSObject.Properties[''mirror''] if ($null -ne... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     $nssmLine = ('    "nssm": {{"version":"{0}","asset":"{1}","url":"{2}","sha256":"{3}"}}' -f $n.version, $n.asset, $n.url, $n.sha256)
     if (-not [string]::IsNullOrWhiteSpace($existingMirror)) {
         $nssmLine = ('    "nssm": {{"version":"{0}","asset":"{1}","url":"{2}","mirror":"{3}","sha256":"{4}"}}' -f $n.version, $n.asset, $n.url, $existingMirror, $n.sha256)
