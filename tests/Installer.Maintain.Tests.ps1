@@ -1,0 +1,438 @@
+# Pester tests for maintain-readiness paths: verify/manifest/dns/service (all mocked).
+# No admin, no network, no real service/registry/adapter calls: destructive paths are
+# shadowed by global stubs that record call order into $global:SedgTestCalls.
+# Requires Pester 5.2+. Run: Invoke-Pester ./tests
+#Requires -Modules @{ ModuleName = 'Pester'; ModuleVersion = '5.2.0' }
+$installerPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'installer.ps1'
+$global:SEDGInstallerPath = $installerPath
+
+function global:Import-InstallerFunction([string]$Name) {
+    # M9: AST extraction instead of fragile regex.
+    $tokens = $null
+    $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($global:SEDGInstallerPath, [ref]$tokens, [ref]$errors)
+    if ($errors.Count -gt 0) { throw "installer.ps1 has $($errors.Count) parse errors" }
+    $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $Name }, $true)
+    if (-not $fn) { throw "installer function not found: $Name" }
+    Invoke-Expression (($fn.Extent.Text) -replace '^function ', 'function global:')
+}
+
+# Assert the recorded calls contain $Expected as an ordered subsequence.
+# Patterns support -like wildcards (never include TestDrive paths in patterns).
+function global:Assert-CallOrder([string[]]$Expected) {
+    $pos = -1
+    foreach ($e in $Expected) {
+        $found = -1
+        for ($i = $pos + 1; $i -lt $global:SedgTestCalls.Count; $i++) {
+            if ([string]$global:SedgTestCalls[$i] -like $e) { $found = $i; break }
+        }
+        if ($found -lt 0) {
+            throw ("Call order mismatch: expected '{0}' after index {1}. Actual: [{2}]" -f $e, $pos, ($global:SedgTestCalls -join ' | '))
+        }
+        $pos = $found
+    }
+}
+
+# Stubs/globals the extracted functions expect (global for scoping).
+function global:T([string]$Key) { return $Key }
+function global:Get-ViInfo([string]$Text) { return $Text }
+
+Import-InstallerFunction 'Verify-Sha256'
+Import-InstallerFunction 'Get-ReleaseAssetUrl'
+Import-InstallerFunction 'Get-ApprovedManifest'
+Import-InstallerFunction 'Get-ManifestProperty'
+Import-InstallerFunction 'Get-ManifestString'
+Import-InstallerFunction 'Assert-ManifestComponents'
+Import-InstallerFunction 'Test-ConfigValid'
+Import-InstallerFunction 'Get-DefaultWinwsArgs'
+Import-InstallerFunction 'Get-WinwsParameters'
+Import-InstallerFunction 'Backup-DnsSettings'
+Import-InstallerFunction 'Restore-DnsSettings'
+Import-InstallerFunction 'Start-AllServices'
+Import-InstallerFunction 'Stop-AllServices'
+Import-InstallerFunction 'Remove-Services'
+Import-InstallerFunction 'Create-Services'
+
+# Global recording stubs for every system-touching command the code under test
+# reaches. Installed at run phase only; removed in AfterAll so the shared
+# session keeps real cmdlets. No SCM, registry, adapter or ACL changes happen.
+BeforeAll {
+    # $script: fixtures must be written at run phase: Pester 5 discovery-phase
+    # assignments are not visible to Its or to the extracted global functions.
+    $script:Lang = 'EN'
+    $script:InfoVI = @{}
+    $script:AllowedReleaseRepos = @('AdguardTeam/dnsproxy', 'bol-van/zapret')
+    $script:DefaultWinwsArgsTemplate = '--wf-tcp=80,443 --wf-udp=443 --hostlist="{0}" --dpi-desync=fake,disorder2 --dpi-desync-fooling=badseq --dpi-desync-repeats=6'
+    $script:WinwsService = 'SEDG-Maint-Winws'
+    $script:DnsProxyService = 'SEDG-Maint-DnsProxy'
+    $script:WatchdogTask = 'SEDG-Maint-Watchdog-Test'
+
+    $global:SedgTestCalls = @()
+    $global:SedgServicesPresent = @()
+    $global:SedgServiceStatus = 'Stopped'
+
+    # Host/step output silenced (Pester keeps its own cached copies, unaffected).
+    function global:Write-Host { param($Object, $ForegroundColor, $BackgroundColor, $NoNewline, $ErrorAction) }
+    function global:Write-Step { param([string]$Text) }
+    function global:Write-Done { param([string]$Text) }
+
+    # Service control (no SCM). Get-Service is one-shot: it answers from the
+    # present-set once per name, then reports absence, so Remove/Create wait
+    # loops settle immediately instead of polling until their deadline.
+    function global:Get-Service { param($Name, $ErrorAction)
+        $global:SedgTestCalls += "Get-Service:$Name"
+        if ($global:SedgServicesPresent -contains $Name) {
+            $global:SedgServicesPresent = @($global:SedgServicesPresent | Where-Object { $_ -ne $Name })
+            return [pscustomobject]@{ Name = [string]$Name; Status = [string]$global:SedgServiceStatus }
+        }
+    }
+    function global:Start-Service { param($Name, $ErrorAction) $global:SedgTestCalls += "Start-Service:$Name" }
+    function global:Stop-Service { param($Name, [switch]$Force, $ErrorAction) $global:SedgTestCalls += "Stop-Service:$Name" }
+    function global:Stop-Process { param($Id, $Name, [switch]$Force, $ErrorAction) $global:SedgTestCalls += 'Stop-Process' }
+    function global:Start-Sleep { param($Seconds, $Milliseconds) $global:SedgTestCalls += 'Start-Sleep' }
+    function global:Unregister-ScheduledTask { param($TaskName, $Confirm, $ErrorAction) $global:SedgTestCalls += "Unregister-ScheduledTask:$TaskName" }
+
+    # Native helpers (no SCM/ACL/DNS changes; keep $LASTEXITCODE at 0).
+    function global:sc.exe { $global:SedgTestCalls += ('sc.exe:' + ($args -join ' ')); $global:LASTEXITCODE = 0 }
+    function global:icacls.exe { $global:SedgTestCalls += ('icacls.exe:' + ($args -join ' ')); $global:LASTEXITCODE = 0 }
+    function global:ipconfig { $global:SedgTestCalls += ('ipconfig:' + ($args -join ' ')) }
+
+    # Network/adapter/DNS layer (no registry or adapter writes).
+    function global:Get-NetAdapter { param($Name, $ErrorAction)
+        $global:SedgTestCalls += 'Get-NetAdapter'
+        return [pscustomobject]@{ Name = 'Ethernet'; InterfaceGuid = '{00000000-0000-0000-0000-000000000042}'; ifIndex = 7 }
+    }
+    function global:Get-DnsClientServerAddress { param($InterfaceIndex, $ErrorAction)
+        $global:SedgTestCalls += 'Get-DnsClientServerAddress'
+        return [pscustomobject]@{ ServerAddresses = @('192.168.50.10') }
+    }
+    function global:Get-NetworkAdapters { param([switch]$IncludeVirtual)
+        $global:SedgTestCalls += 'Get-NetworkAdapters'
+        return [pscustomobject]@{ Name = 'Ethernet'; InterfaceGuid = '{00000000-0000-0000-0000-000000000042}'; ifIndex = 7 }
+    }
+    function global:Get-StaticDnsServers { param($InterfaceGuid, $Stack)
+        $global:SedgTestCalls += "Get-StaticDnsServers:$Stack"
+        if ([string]$Stack -eq 'Tcpip') { return @('10.0.0.1') }
+        return @()
+    }
+    function global:Set-SecureAcl { param($Path, $AdminOnly) $global:SedgTestCalls += 'Set-SecureAcl' }
+    function global:Set-AdapterDnsStatic { param($AdapterName, $V4, $V6)
+        $global:SedgTestCalls += ('Set-AdapterDnsStatic:' + $AdapterName + ':' + (@($V4) + @($V6) -join ','))
+    }
+    function global:Set-AdapterDnsBoth { param($AdapterName, $V4, $V6)
+        $global:SedgTestCalls += ('Set-AdapterDnsBoth:' + $AdapterName + ':' + (@($V4) + @($V6) -join ','))
+    }
+    function global:Set-AdapterDnsFamily { param($AdapterName, $AddressFamily, $Dhcp)
+        $global:SedgTestCalls += ('Set-AdapterDnsFamily:' + $AdapterName + ':' + $AddressFamily)
+    }
+    function global:Reset-DnsToDhcp { param($IncludeVirtual) $global:SedgTestCalls += 'Reset-DnsToDhcp' }
+    function global:Clear-DnsClientCache { $global:SedgTestCalls += 'Clear-DnsClientCache' }
+
+    # Installer helpers that would otherwise hit the real system.
+    function global:Get-OurProcesses { $global:SedgTestCalls += 'Get-OurProcesses'; return @() }
+    function global:Log-Port53Owner { $global:SedgTestCalls += 'Log-Port53Owner' }
+    function global:Invoke-Nssm { param($Arguments)
+        $global:SedgTestCalls += ('Invoke-Nssm:' + (@($Arguments) -join ' '))
+        if (@($Arguments).Count -gt 1 -and [string]$Arguments[0] -eq 'install') {
+            $global:SedgServicesPresent = @($global:SedgServicesPresent) + [string]$Arguments[1]
+        }
+    }
+}
+
+AfterAll {
+    $stubNames = @(
+        'Write-Host', 'Write-Step', 'Write-Done',
+        'Get-Service', 'Start-Service', 'Stop-Service', 'Stop-Process', 'Start-Sleep',
+        'Unregister-ScheduledTask', 'sc.exe', 'icacls.exe', 'ipconfig',
+        'Get-NetAdapter', 'Get-DnsClientServerAddress', 'Get-NetworkAdapters',
+        'Get-StaticDnsServers', 'Set-SecureAcl', 'Set-AdapterDnsStatic',
+        'Set-AdapterDnsBoth', 'Set-AdapterDnsFamily', 'Reset-DnsToDhcp',
+        'Clear-DnsClientCache', 'Get-OurProcesses', 'Log-Port53Owner', 'Invoke-Nssm'
+    )
+    foreach ($n in $stubNames) {
+        Remove-Item -LiteralPath ("Function:\{0}" -f $n) -Force -ErrorAction SilentlyContinue
+    }
+    # Restore the shared helpers exactly like Installer.Logic.Tests.ps1 leaves them.
+    Import-InstallerFunction 'Write-Step'
+    Import-InstallerFunction 'Write-Done'
+    $global:SedgTestCalls = @()
+    $global:SedgServicesPresent = @()
+}
+
+Describe 'Verify-Sha256' {
+    It 'returns the real SHA-256 when the digest matches' {
+        $file = Join-Path $env:TEMP ("sedg-maint-verify-ok-{0}.bin" -f $PID)
+        try {
+            'verify-payload-ok' | Set-Content -LiteralPath $file -Encoding ASCII -NoNewline
+            $expected = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
+            (Verify-Sha256 -File $file -Expected $expected -Label 'maint-ok') | Should -Be $expected
+        } finally {
+            Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+        }
+    }
+    It 'throws when the digest does not match' {
+        $file = Join-Path $env:TEMP ("sedg-maint-verify-bad-{0}.bin" -f $PID)
+        try {
+            'verify-payload-bad' | Set-Content -LiteralPath $file -Encoding ASCII -NoNewline
+            { Verify-Sha256 -File $file -Expected ('0' * 64) -Label 'maint-bad' } | Should -Throw
+        } finally {
+            Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+        }
+    }
+    It 'throws when the target file does not exist' {
+        $file = Join-Path $env:TEMP ("sedg-maint-verify-missing-{0}.bin" -f $PID)
+        { Verify-Sha256 -File $file -Expected ('0' * 64) -Label 'maint-missing' } | Should -Throw
+    }
+    It 'throws when the expected digest is malformed' {
+        $file = Join-Path $env:TEMP ("sedg-maint-verify-malformed-{0}.bin" -f $PID)
+        try {
+            'verify-payload-malformed' | Set-Content -LiteralPath $file -Encoding ASCII -NoNewline
+            { Verify-Sha256 -File $file -Expected 'not-a-sha256' -Label 'maint-malformed' } | Should -Throw
+        } finally {
+            Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+Describe 'Approved manifest release URLs' {
+    BeforeAll {
+        $manifestPath = Join-Path (Split-Path -Parent $global:SEDGInstallerPath) 'approved-releases.json'
+        $script:ApprovedManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    }
+    It 'builds the pinned dnsproxy asset URL from the manifest' {
+        $c = $script:ApprovedManifest.components.dnsproxy
+        $url = Get-ReleaseAssetUrl $c.repository $c.tag $c.asset
+        $url | Should -Be ('https://github.com/{0}/releases/download/{1}/{2}' -f $c.repository, $c.tag, $c.asset)
+        $url | Should -Match '^https://github\.com/AdguardTeam/dnsproxy/releases/download/v\d+(\.\d+)*/dnsproxy-windows-amd64-v\d+(\.\d+)*\.zip$'
+    }
+    It 'builds the pinned zapret asset URL from the manifest' {
+        $c = $script:ApprovedManifest.components.zapret
+        $url = Get-ReleaseAssetUrl $c.repository $c.tag $c.asset
+        $url | Should -Be ('https://github.com/{0}/releases/download/{1}/{2}' -f $c.repository, $c.tag, $c.asset)
+        $url | Should -Match '^https://github\.com/bol-van/zapret/releases/download/v\d+(\.\d+)*/zapret-v\d+(\.\d+)*\.zip$'
+    }
+    It 'uses the pinned https nssm url from the manifest' {
+        $c = $script:ApprovedManifest.components.nssm
+        $c.url | Should -Match '^https://'
+        (Get-ManifestString $c 'url') | Should -Be $c.url
+        (Get-ManifestString $c 'mirror') | Should -Be ''
+    }
+}
+
+Describe 'Get-ApprovedManifest offline' {
+    It 'returns the cache without touching the network' {
+        $script:ManifestCache = [pscustomobject]@{ schema = 1; policy = 'approved-only'; cached = $true }
+        (Get-ApprovedManifest).cached | Should -Be $true
+    }
+    It 'falls back to the embedded manifest when no source uri is configured' {
+        $script:ManifestCache = $null
+        $script:InstallerVersion = '9.9.9-maint-test'
+        $script:NssmVersion = '2.24'
+        $script:NssmSha256 = ('a' * 64)
+        $script:Sources = [pscustomobject]@{ Manifest = ''; ManifestFallback = ''; NssmZip = 'https://nssm.cc/release/nssm-2.24.zip' }
+        $m = Get-ApprovedManifest
+        $m.schema | Should -Be 1
+        $m.policy | Should -Be 'approved-only'
+        $m.installer.version | Should -Be '9.9.9-maint-test'
+        Assert-ManifestComponents $m
+        $m.components.dnsproxy.tag | Should -Be 'v0.85.0'
+    }
+}
+
+Describe 'Test-ConfigValid' {
+    It 'accepts a minimal valid config' {
+        $script:ConfigFile = Join-Path $TestDrive 'maint-ok.yaml'
+        "listen-ports:`n  - 53`nupstream:`n  - https://x/dns-query`n" | Set-Content -LiteralPath $script:ConfigFile -Encoding UTF8 -NoNewline
+        (Test-ConfigValid) | Should -Be $true
+    }
+    It 'rejects junk' {
+        $script:ConfigFile = Join-Path $TestDrive 'maint-junk.yaml'
+        "hello`n" | Set-Content -LiteralPath $script:ConfigFile -Encoding UTF8 -NoNewline
+        (Test-ConfigValid) | Should -Be $false
+    }
+}
+
+Describe 'Winws deployment arguments' {
+    It 'default args point the hostlist at the deployed blacklist' {
+        $script:ZapretPath = Join-Path $TestDrive 'maint-zapret'
+        New-Item -ItemType Directory -Path $script:ZapretPath -Force | Out-Null
+        $expected = $script:DefaultWinwsArgsTemplate -f (Join-Path $script:ZapretPath 'blacklist.txt')
+        (Get-DefaultWinwsArgs) | Should -Be $expected
+        (Get-DefaultWinwsArgs) | Should -Match '--hostlist="'
+    }
+    It 'Get-WinwsParameters falls back to defaults and honors a custom line' {
+        $script:ZapretPath = Join-Path $TestDrive 'maint-zapret-2'
+        New-Item -ItemType Directory -Path $script:ZapretPath -Force | Out-Null
+        $script:WinwsArgsFile = Join-Path $script:ZapretPath 'winws-args.txt'
+        if (Test-Path -LiteralPath $script:WinwsArgsFile) { Remove-Item -LiteralPath $script:WinwsArgsFile -Force }
+        $expected = $script:DefaultWinwsArgsTemplate -f (Join-Path $script:ZapretPath 'blacklist.txt')
+        (Get-WinwsParameters) | Should -Be $expected
+        '--wf-tcp=443 --custom=1' | Set-Content -LiteralPath $script:WinwsArgsFile -Encoding ASCII
+        (Get-WinwsParameters) | Should -Be '--wf-tcp=443 --custom=1'
+    }
+}
+
+Describe 'DNS backup/restore (mocked)' {
+    It 'Backup-DnsSettings snapshots through stubs only' {
+        $global:SedgTestCalls = @()
+        $script:TempPath = Join-Path $TestDrive 'dns-e1-temp'
+        $script:DnsBackupDir = Join-Path $TestDrive 'dns-e1-backup'
+        New-Item -ItemType Directory -Path $script:DnsBackupDir -Force | Out-Null
+        $script:DnsBackupSafe = Join-Path $script:DnsBackupDir 'dns-backup.json'
+        $script:DnsBackupFile = Join-Path (Join-Path $TestDrive 'dns-e1-legacy') 'dns-backup.json'
+        $script:BootstrapTainted = @('1.1.1.1', '8.8.8.8', '2606:4700:4700::1111')
+
+        Backup-DnsSettings
+
+        (Test-Path -LiteralPath $script:DnsBackupSafe -PathType Leaf) | Should -Be $true
+        $saved = Get-Content -LiteralPath $script:DnsBackupSafe -Raw | ConvertFrom-Json
+        @($saved.Adapters).Count | Should -Be 1
+        @($saved.Adapters)[0].InterfaceGuid | Should -Be '{00000000-0000-0000-0000-000000000042}'
+        (@($saved.Adapters)[0].V4Static -join ',') | Should -Be '10.0.0.1'
+        ($global:SedgTestCalls -join "`n") | Should -Be (@(
+            'Get-NetworkAdapters',
+            'Get-DnsClientServerAddress',
+            'Get-StaticDnsServers:Tcpip',
+            'Get-StaticDnsServers:Tcpip6',
+            'Set-SecureAcl'
+        ) -join "`n")
+    }
+    It 'Restore-DnsSettings replays the backup through stubs in order' {
+        $global:SedgTestCalls = @()
+        $script:TempPath = Join-Path $TestDrive 'dns-e2-temp'
+        $script:DnsBackupDir = Join-Path $TestDrive 'dns-e2-backup'
+        New-Item -ItemType Directory -Path $script:DnsBackupDir -Force | Out-Null
+        $script:DnsBackupSafe = Join-Path $script:DnsBackupDir 'dns-backup.json'
+        $script:DnsBackupFile = Join-Path (Join-Path $TestDrive 'dns-e2-legacy') 'dns-backup.json'
+        $script:BootstrapTainted = @('1.1.1.1', '8.8.8.8', '2606:4700:4700::1111')
+
+        Backup-DnsSettings
+        Restore-DnsSettings
+
+        ($global:SedgTestCalls -join "`n") | Should -Be (@(
+            'Get-NetworkAdapters',
+            'Get-DnsClientServerAddress',
+            'Get-StaticDnsServers:Tcpip',
+            'Get-StaticDnsServers:Tcpip6',
+            'Set-SecureAcl',
+            'Get-NetAdapter',
+            'Set-AdapterDnsBoth:Ethernet:10.0.0.1',
+            'Clear-DnsClientCache',
+            'ipconfig:/flushdns'
+        ) -join "`n")
+        $global:SedgTestCalls | Should -Not -Contain 'Reset-DnsToDhcp'
+        $global:SedgTestCalls | Should -Not -Contain 'Set-AdapterDnsFamily:Ethernet:IPv4'
+    }
+}
+
+Describe 'Service lifecycle (mocked)' {
+    It 'Stop-AllServices stops every service in order without touching SCM' {
+        $global:SedgTestCalls = @()
+        $global:SedgServiceStatus = 'Stopped'
+        $global:SedgServicesPresent = @($script:DnsProxyService, $script:WinwsService)
+
+        Stop-AllServices
+
+        ($global:SedgTestCalls -join "`n") | Should -Be (@(
+            'Log-Port53Owner',
+            "Stop-Service:$($script:DnsProxyService)",
+            "Stop-Service:$($script:WinwsService)",
+            'Get-OurProcesses',
+            "Get-Service:$($script:DnsProxyService)",
+            "Get-Service:$($script:WinwsService)",
+            'Get-OurProcesses'
+        ) -join "`n")
+        $global:SedgTestCalls | Should -Not -Contain 'Stop-Process'
+    }
+    It 'Start-AllServices starts winws then dnsproxy and verifies status' {
+        $global:SedgTestCalls = @()
+        $global:SedgServiceStatus = 'Running'
+        $global:SedgServicesPresent = @($script:DnsProxyService, $script:WinwsService)
+        $script:DnsOnly = $false
+        $script:DnsProxyPath = Join-Path $TestDrive 'svc-dnsproxy'
+        $script:ZapretPath = Join-Path $TestDrive 'svc-zapret'
+        $script:ConfigFile = Join-Path $TestDrive 'svc-config.yaml'
+        $script:NssmPath = Join-Path (Join-Path $TestDrive 'svc-nssm') 'nssm.cmd'
+        New-Item -ItemType Directory -Path $script:DnsProxyPath -Force | Out-Null
+        New-Item -ItemType Directory -Path $script:ZapretPath -Force | Out-Null
+        New-Item -ItemType Directory -Path (Split-Path -Parent $script:NssmPath) -Force | Out-Null
+        '@exit 0' | Set-Content -LiteralPath $script:NssmPath -Encoding ASCII
+
+        Start-AllServices
+
+        ($global:SedgTestCalls -join "`n") | Should -Be (@(
+            "Start-Service:$($script:WinwsService)",
+            'Start-Sleep',
+            "Get-Service:$($script:WinwsService)",
+            "Start-Service:$($script:DnsProxyService)",
+            'Start-Sleep',
+            "Get-Service:$($script:DnsProxyService)"
+        ) -join "`n")
+    }
+    It 'Remove-Services stops then deletes each service via the sc stub' {
+        $global:SedgTestCalls = @()
+        $global:SedgServiceStatus = 'Stopped'
+        $global:SedgServicesPresent = @($script:DnsProxyService, $script:WinwsService)
+        $script:NssmPath = Join-Path (Join-Path $TestDrive 'remove-nssm') 'nssm.exe'
+
+        Remove-Services
+
+        ($global:SedgTestCalls -join "`n") | Should -Be (@(
+            "Get-Service:$($script:WinwsService)",
+            "Stop-Service:$($script:WinwsService)",
+            "sc.exe:delete $($script:WinwsService)",
+            "Get-Service:$($script:DnsProxyService)",
+            "Stop-Service:$($script:DnsProxyService)",
+            "sc.exe:delete $($script:DnsProxyService)",
+            "Get-Service:$($script:WinwsService)",
+            "Get-Service:$($script:DnsProxyService)",
+            "Unregister-ScheduledTask:$($script:WatchdogTask)"
+        ) -join "`n")
+    }
+    It 'Create-Services removes, installs and configures through stubs in order' {
+        $global:SedgTestCalls = @()
+        $global:SedgServiceStatus = 'Stopped'
+        $global:SedgServicesPresent = @($script:DnsProxyService, $script:WinwsService)
+        $script:DnsOnly = $false
+        $script:ZapretPath = Join-Path $TestDrive 'create-zapret'
+        $script:DnsProxyPath = Join-Path $TestDrive 'create-dnsproxy'
+        $script:InstallPath = Join-Path $TestDrive 'create-install'
+        $script:ConfigFile = Join-Path $TestDrive 'create-config.yaml'
+        $script:WinwsArgsFile = Join-Path $script:ZapretPath 'winws-args.txt'
+        New-Item -ItemType Directory -Path $script:ZapretPath -Force | Out-Null
+        New-Item -ItemType Directory -Path $script:DnsProxyPath -Force | Out-Null
+        New-Item -ItemType Directory -Path $script:InstallPath -Force | Out-Null
+        New-Item -ItemType File -Path (Join-Path $script:ZapretPath 'winws.exe') -Force | Out-Null
+        New-Item -ItemType File -Path (Join-Path $script:DnsProxyPath 'dnsproxy.exe') -Force | Out-Null
+        $script:NssmPath = Join-Path $script:InstallPath 'nssm.cmd'
+        '@exit 0' | Set-Content -LiteralPath $script:NssmPath -Encoding ASCII
+
+        Create-Services
+
+        Assert-CallOrder @(
+            "Get-Service:$($script:WinwsService)",
+            "Stop-Service:$($script:WinwsService)",
+            "Get-Service:$($script:DnsProxyService)",
+            "Stop-Service:$($script:DnsProxyService)",
+            "Unregister-ScheduledTask:$($script:WatchdogTask)",
+            "Invoke-Nssm:install $($script:WinwsService)*",
+            "sc.exe:config $($script:WinwsService) depend= Tcpip",
+            "Invoke-Nssm:install $($script:DnsProxyService)*",
+            "sc.exe:config $($script:DnsProxyService) depend= Tcpip",
+            "sc.exe:config $($script:DnsProxyService) start= auto",
+            'icacls.exe*',
+            "Invoke-Nssm:set $($script:DnsProxyService) ObjectName*",
+            "Invoke-Nssm:set $($script:WinwsService) AppExit*",
+            "sc.exe:failure $($script:WinwsService)*",
+            "Invoke-Nssm:set $($script:DnsProxyService) AppExit*",
+            "sc.exe:failureflag $($script:DnsProxyService)*",
+            "Get-Service:$($script:WinwsService)",
+            "Get-Service:$($script:DnsProxyService)"
+        )
+        @($global:SedgTestCalls | Where-Object { $_ -like 'Invoke-Nssm:install*' }).Count | Should -Be 2
+        @($global:SedgTestCalls | Where-Object { $_ -like 'icacls.exe*' }).Count | Should -Be 2
+        @($global:SedgTestCalls | Where-Object { $_ -like 'sc.exe:failure *' }).Count | Should -Be 2
+        @($global:SedgTestCalls | Where-Object { $_ -like 'sc.exe:failureflag*' }).Count | Should -Be 2
+        $global:SedgTestCalls | Should -Not -Contain 'Stop-Process'
+    }
+}
