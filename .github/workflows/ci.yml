@@ -110,7 +110,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .node-version
 
@@ -118,9 +118,9 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
           Set-Location cloudflare
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
 
       - name: cf build + deploy dry-run (no sign-in required)
         shell: bash

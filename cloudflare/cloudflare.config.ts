@@ -1,3 +1,6 @@
+// Source of truth for worker name / route / compatibilityDate: wrangler.toml,
+// keep in sync. worker block is the static-assets route only (no `main`,
+// assets-only deploy, no Worker script).
 import { defineConfig, triggers } from "cf/config";
 
 export default defineConfig({
