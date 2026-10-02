@@ -69,7 +69,6 @@ try {
 # set (optional, for tests and packaging - nothing requires them).
 
 $script:InstallerVersion = '1.0.4'
-# Install root. Default unchanged; set SEDG_INSTALL_PATH to relocate.
 if (-not [string]::IsNullOrWhiteSpace($env:SEDG_INSTALL_PATH)) {
     $script:InstallPath = $env:SEDG_INSTALL_PATH
 } else {
@@ -102,7 +101,6 @@ $script:WatchdogScript = Join-Path $script:InstallPath 'watchdog.ps1'
 $script:WatchdogFlag = Join-Path $script:InstallPath 'watchdog-fallback.flag'
 $script:WatchdogCount = Join-Path $script:InstallPath 'watchdog-count.txt'
 
-# Primary manifest URL. Default unchanged; SEDG_MANIFEST_URL overrides it.
 $script:manifestUrl = 'https://dl.taiyuanwangjie.dpdns.org/approved-releases.json'
 if (-not [string]::IsNullOrWhiteSpace($env:SEDG_MANIFEST_URL)) { $script:manifestUrl = $env:SEDG_MANIFEST_URL }
 $script:Sources = @{
@@ -1511,7 +1509,6 @@ function Install-StageComponents {
     $winwsExe = Join-Path $runtimeRoot 'winws.exe'
     if (-not (Test-Path $winwsExe)) { throw 'x64 winws.exe not found in upstream zapret archive.' }
 
-    # Stage the complete x64 Windows runtime from the official archive.
     Get-ChildItem -LiteralPath $runtimeRoot -Force | ForEach-Object {
         Copy-Item -LiteralPath $_.FullName -Destination $stageZap -Recurse -Force
     }
@@ -1519,7 +1516,6 @@ function Install-StageComponents {
         throw 'Failed to stage winws.exe from the official zapret archive.'
     }
 
-    # The official x64 bundle must contain its matching WinDivert64.sys.
     if (-not (Test-Path (Join-Path $stageZap 'WinDivert64.sys'))) {
         throw 'Official x64 zapret bundle is missing WinDivert64.sys.'
     }
@@ -1564,7 +1560,6 @@ function Install-StageComponents {
     Write-Done (((T 'DoneNssmStaged') -f $nssmVersion))
     Write-Done 'Services prepared.'
 
-    # Validate every staged component before touching the live installation.
     Write-Step 'Validating staged components...'
     Write-Host '  DNSProxy: dnsproxy.exe' -ForegroundColor DarkGray
     Write-Host '  Zapret: winws.exe, cygwin1.dll, WinDivert.dll, WinDivert64.sys' -ForegroundColor DarkGray
@@ -1575,7 +1570,6 @@ function Install-StageComponents {
     if (-not (Test-Path (Join-Path $stageZap 'WinDivert.dll'))) { throw 'Staged WinDivert.dll is missing.' }
     if (-not (Test-Path (Join-Path $stageZap 'WinDivert64.sys'))) { throw 'Staged WinDivert64.sys is missing.' }
     if (-not (Test-Path $stageNssm)) { throw 'Staged nssm.exe is missing.' }
-
 
     Write-Done 'Components validated.'
 
