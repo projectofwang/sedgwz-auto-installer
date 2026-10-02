@@ -103,7 +103,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $existing = ''
-          try { $existing = (gh pr list --head $env:WATCH_BRANCH --json number --jq '.[0].number' 2>$null).Trim() } catch {}
+          try { $existing = (gh pr list --head $env:WATCH_BRANCH --json number --jq '.[0].number' 2>$null).Trim() } catch { Write-Warning "Could not list existing PR: $($_.Exception.Message)" }
           if ([string]::IsNullOrWhiteSpace($existing)) {
             $body = @(
               'Automated upstream component update (review required before merge).',

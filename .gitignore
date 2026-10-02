@@ -11,3 +11,6 @@ Thumbs.db
 .idea/
 *.bak
 *~
+
+# Pester -CI scratch output (regenerable)
+testResults.xml

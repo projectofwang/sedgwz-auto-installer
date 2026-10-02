@@ -170,6 +170,11 @@ Describe 'Verify-Sha256' {
             Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
         }
     }
+    # Guard: without the real function these Should -Throw tests would pass
+    # vacuously (CommandNotFound also throws).
+    It 'guards: Verify-Sha256 is defined' {
+        Get-Command Verify-Sha256 | Should -Not -BeNullOrEmpty
+    }
     It 'throws when the digest does not match' {
         $file = Join-Path $env:TEMP ("sedg-maint-verify-bad-{0}.bin" -f $PID)
         try {
@@ -220,6 +225,21 @@ Describe 'Approved manifest release URLs' {
 }
 
 Describe 'Get-ApprovedManifest offline' {
+    BeforeAll {
+        # Save shared maintain state this Describe overwrites, restore after.
+        $script:SavedSources = $script:Sources
+        $script:SavedManifestCache = $script:ManifestCache
+        $script:SavedInstallerVersion = $script:InstallerVersion
+        $script:SavedNssmVersion = $script:NssmVersion
+        $script:SavedNssmSha256 = $script:NssmSha256
+    }
+    AfterAll {
+        $script:Sources = $script:SavedSources
+        $script:ManifestCache = $script:SavedManifestCache
+        $script:InstallerVersion = $script:SavedInstallerVersion
+        $script:NssmVersion = $script:SavedNssmVersion
+        $script:NssmSha256 = $script:SavedNssmSha256
+    }
     It 'returns the cache without touching the network' {
         $script:ManifestCache = [pscustomobject]@{ schema = 1; policy = 'approved-only'; cached = $true }
         (Get-ApprovedManifest).cached | Should -Be $true

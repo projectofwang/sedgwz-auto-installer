@@ -79,34 +79,34 @@ $script:ObsoleteInstallPaths = @(
     'C:\dns-doh',
     'C:\dns-bibica-net-doh'
 )
-$script:DnsProxyPath = Join-Path $InstallPath 'dnsproxy'
-$script:ZapretPath = Join-Path $InstallPath 'zapret'
-$script:NssmPath = Join-Path $InstallPath 'nssm.exe'
+$script:DnsProxyPath = Join-Path $script:InstallPath 'dnsproxy'
+$script:ZapretPath = Join-Path $script:InstallPath 'zapret'
+$script:NssmPath = Join-Path $script:InstallPath 'nssm.exe'
 $script:DnsBackupDir = Join-Path $env:ProgramData 'serverless-edge-dns-gateway'
 # H1: staging lives in an admin-only directory under ProgramData, never %TEMP%.
 $script:TempPath = Join-Path $script:DnsBackupDir 'staging'
 $script:ConfigFile = Join-Path $DnsProxyPath 'config.yaml'
 $script:BlacklistFile = Join-Path $ZapretPath 'blacklist.txt'
 $script:WinwsArgsFile = Join-Path $ZapretPath 'winws-args.txt'
-$script:StateFile = Join-Path $InstallPath 'state.json'
-$script:DnsBackupFile = Join-Path $InstallPath 'dns-backup.json'
+$script:StateFile = Join-Path $script:InstallPath 'state.json'
+$script:DnsBackupFile = Join-Path $script:InstallPath 'dns-backup.json'
 $script:DnsBackupSafe = Join-Path $script:DnsBackupDir 'dns-backup.json'
-$script:GatewayFlag = Join-Path $InstallPath 'gateway-enabled'
-$script:FailClosedFile = Join-Path $InstallPath 'fail-closed'
+$script:GatewayFlag = Join-Path $script:InstallPath 'gateway-enabled'
+$script:FailClosedFile = Join-Path $script:InstallPath 'fail-closed'
 $script:BootstrapTainted = @('127.0.0.1', '::1', '1.1.1.1', '8.8.8.8', '2606:4700:4700::1111', '2001:4860:4860::8888')
 $script:DefaultWinwsArgsTemplate = '--wf-tcp=80,443 --wf-udp=443 --hostlist="{0}" --dpi-desync=fake,disorder2 --dpi-desync-fooling=badseq --dpi-desync-repeats=6'
 $script:DnsProxyService = 'dnsproxy-service'
 $script:WinwsService = 'winws-service'
 $script:WatchdogTask = 'SEDG-DNS-Watchdog'
-$script:WatchdogScript = Join-Path $InstallPath 'watchdog.ps1'
-$script:WatchdogFlag = Join-Path $InstallPath 'watchdog-fallback.flag'
-$script:WatchdogCount = Join-Path $InstallPath 'watchdog-count.txt'
+$script:WatchdogScript = Join-Path $script:InstallPath 'watchdog.ps1'
+$script:WatchdogFlag = Join-Path $script:InstallPath 'watchdog-fallback.flag'
+$script:WatchdogCount = Join-Path $script:InstallPath 'watchdog-count.txt'
 
 # Primary manifest URL. Default unchanged; SEDG_MANIFEST_URL overrides it.
-$manifestUrl = 'https://dl.taiyuanwangjie.dpdns.org/approved-releases.json'
-if (-not [string]::IsNullOrWhiteSpace($env:SEDG_MANIFEST_URL)) { $manifestUrl = $env:SEDG_MANIFEST_URL }
+$script:manifestUrl = 'https://dl.taiyuanwangjie.dpdns.org/approved-releases.json'
+if (-not [string]::IsNullOrWhiteSpace($env:SEDG_MANIFEST_URL)) { $script:manifestUrl = $env:SEDG_MANIFEST_URL }
 $script:Sources = @{
-    Manifest         = $manifestUrl
+    Manifest         = $script:manifestUrl
     ManifestFallback = 'https://raw.githubusercontent.com/projectofwang/sedgwz-auto-installer/main/approved-releases.json'
     NssmZip     = 'https://nssm.cc/release/nssm-2.24.zip'
 }
