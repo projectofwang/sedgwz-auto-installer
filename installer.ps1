@@ -2011,14 +2011,59 @@ function Write-Blacklist {
     Write-Host (('  ' + (T 'LbFile') + ': ' + $script:BlacklistFile)) -ForegroundColor DarkGray
     New-Item -ItemType Directory -Path $script:ZapretPath -Force | Out-Null
     if (-not (Test-Path $script:BlacklistFile)) {
-        # UTF-8 without BOM (winws chokes on a BOM). Empty list matches nothing:
-        # winws runs but bypasses nothing until the user adds domains.
+        # UTF-8 without BOM (winws chokes on a BOM).
         $lines = @(
             '# One hostname per line.',
             '# Preserved across component updates.',
-            '# NOTE: empty by default, so winws --hostlist matches nothing.',
-            '# Add blocked domains here (e.g. youtube.com) or switch winws-args.txt',
-            '# to a broader strategy. See https://github.com/bol-van/zapret.'
+            '# Default list.',
+            'pornhub.com',
+            'www.pornhub.com',
+            'vn.linkedin.com',
+            'medium.com',
+            'bilibili.tv',
+            'www.bilibili.tv',
+            'www.bbc.com',
+            'bbc.com',
+            'www.bbc.co.uk',
+            'bbc.co.uk',
+            'steamcommunity.com',
+            'www.steamcommunity.com',
+            'steampowered.com',
+            'www.steampowered.com',
+            'store.steampowered.com',
+            'help.steampowered.com',
+            'steamusercontent.com',
+            'community.fastly.steamstatic.com',
+            'images.steamusercontent.com',
+            'api.steampowered.com',
+            'steamstatic.com',
+            'rsload.net',
+            'www.xvideos.com',
+            'xvideos.com',
+            'nyaa.si',
+            'lrepacks.net',
+            'voa.gov',
+            'rfa.org',
+            'amnesty.org',
+            'pastebin.com',
+            'paste.ee',
+            'xnxx.com',
+            'xhamster.com',
+            'javhd.today',
+            'javhd.com',
+            'spankbang.com',
+            'xvideos2.com',
+            'xvideos3.com',
+            'javmost.com',
+            'beeg.com',
+            'sextop1.net',
+            'sextop1.sale',
+            'youporn.com',
+            'www.wattpad.com',
+            'mangadex.org',
+            'fitgirl-repacks.site',
+            'voatiengviet.com',
+            'voz.vn'
         )
         [IO.File]::WriteAllLines($script:BlacklistFile, $lines, [Text.UTF8Encoding]::new($false))
     }
