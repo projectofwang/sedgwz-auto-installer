@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-10-05
+
+- Manager self-update now relaunches the new manager menu in the same
+  admin console (`-Action Menu` instead of `-Action Update` then exit),
+  so the window returns to the menu instead of closing.
+
 ## [1.0.5] - 2026-10-05
 
 - Component updates: dnsproxy `v0.85.0` -> `v0.86.0`, zapret kept at
@@ -54,7 +60,8 @@
   a second origin for hash cross-checks, CI (syntax, Pester, parity,
   Cloudflare build), upstream component watcher.
 
-[Unreleased]: https://github.com/projectofwang/sedgwz-auto-installer/compare/v1.0.5...HEAD
+[Unreleased]: https://github.com/projectofwang/sedgwz-auto-installer/compare/v1.0.6...HEAD
+[1.0.6]: https://github.com/projectofwang/sedgwz-auto-installer/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/projectofwang/sedgwz-auto-installer/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/projectofwang/sedgwz-auto-installer/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/projectofwang/sedgwz-auto-installer/compare/v1.0.2...v1.0.3
