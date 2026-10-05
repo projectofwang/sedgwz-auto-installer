@@ -2566,7 +2566,8 @@ function Remove-InstallDirectoryCleanly([string]$Path, [switch]$AllowSchedule) {
 function Update-ManagerFromDist([string]$ForAction) {
     # Self-update the local manager before Install/Update so an old manager
     # never fails the version check and destroys a working setup. Best-effort:
-    # re-execs the new manager and exits; $false lets the caller continue.
+    # re-execs the new manager's menu in this console and returns; $false lets
+    # the caller continue its pending work in the same window.
     try {
         $distBase = $script:Sources.Manifest -replace '/approved-releases\.json$', ''
         if ([string]::IsNullOrWhiteSpace($distBase)) { return $false }
@@ -2591,13 +2592,12 @@ function Update-ManagerFromDist([string]$ForAction) {
         Remove-Item -LiteralPath $tmpManager -Force -ErrorAction SilentlyContinue
         Write-Done 'Local manager updated.'
 
-        $reArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $managerPath + '"'), '-Action', $ForAction)
+        $reArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $managerPath + '"'), '-Action', 'Menu')
         if ($ForceUpdate) { $reArgs += '-ForceUpdate' }
         if ($Clean) { $reArgs += '-Clean' }
         if ($DnsOnly) { $reArgs += '-DnsOnly' }
         if ($script:Lang -in @('EN','VI')) { $reArgs += @('-Language', $script:Lang) }
         & powershell.exe @reArgs
-        Exit-Installer $LASTEXITCODE
     } catch {
         Write-Host (('  Manager self-update skipped: ' + $_.Exception.Message)) -ForegroundColor Yellow
         return $false
