@@ -68,7 +68,7 @@ try {
 # SEDG_INSTALL_PATH / SEDG_MANIFEST_URL only override them when explicitly
 # set (optional, for tests and packaging - nothing requires them).
 
-$script:InstallerVersion = '1.0.4'
+$script:InstallerVersion = '1.0.5'
 if (-not [string]::IsNullOrWhiteSpace($env:SEDG_INSTALL_PATH)) {
     $script:InstallPath = $env:SEDG_INSTALL_PATH
 } else {
@@ -682,9 +682,9 @@ function Get-ApprovedManifest {
         components = [pscustomobject]@{
             dnsproxy = [pscustomobject]@{
                 repository = 'AdguardTeam/dnsproxy'
-                tag = 'v0.85.0'
-                asset = 'dnsproxy-windows-amd64-v0.85.0.zip'
-                sha256 = '5b7b57b77169f6748618ed2bc2a35060f774fe2bac14a0e54352b1d502fe61eb'
+                tag = 'v0.86.0'
+                asset = 'dnsproxy-windows-amd64-v0.86.0.zip'
+                sha256 = 'dedc186ddd4b96bf92474f91d972f67da0824e0141d09e3102fd96db9f8a0dbc'
             }
             zapret = [pscustomobject]@{
                 repository = 'bol-van/zapret'

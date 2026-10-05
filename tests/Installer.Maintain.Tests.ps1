@@ -255,7 +255,7 @@ Describe 'Get-ApprovedManifest offline' {
         $m.policy | Should -Be 'approved-only'
         $m.installer.version | Should -Be '9.9.9-maint-test'
         Assert-ManifestComponents $m
-        $m.components.dnsproxy.tag | Should -Be 'v0.85.0'
+        $m.components.dnsproxy.tag | Should -Be 'v0.86.0'
     }
 }
 

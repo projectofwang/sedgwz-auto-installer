@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-10-05
+
+- Component updates: dnsproxy `v0.85.0` -> `v0.86.0`, zapret kept at
+  `v72.13`; embedded manifest and `approved-releases.json` bumped to
+  installer `1.0.5` with refreshed SHA-256 pins.
+
 ## [1.0.4] - 2026-10-01
 
 - Update now always refreshes `state.json`, even when binaries are
@@ -48,7 +54,8 @@
   a second origin for hash cross-checks, CI (syntax, Pester, parity,
   Cloudflare build), upstream component watcher.
 
-[Unreleased]: https://github.com/projectofwang/sedgwz-auto-installer/compare/v1.0.4...HEAD
+[Unreleased]: https://github.com/projectofwang/sedgwz-auto-installer/compare/v1.0.5...HEAD
+[1.0.5]: https://github.com/projectofwang/sedgwz-auto-installer/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/projectofwang/sedgwz-auto-installer/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/projectofwang/sedgwz-auto-installer/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/projectofwang/sedgwz-auto-installer/compare/v1.0.1...v1.0.2

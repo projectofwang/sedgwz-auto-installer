@@ -37,7 +37,7 @@ Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error -ExcludeRule PSAvoidUsing
 
 ## Version and manifest parity
 
-Single version source: `installer.ps1` (`$script:InstallerVersion = '1.0.4'`).
+Single version source: `installer.ps1` (`$script:InstallerVersion = '1.0.5'`).
 These must stay in lockstep:
 
 - `approved-releases.json` -> `installer.version` (CI fails on mismatch).
@@ -49,7 +49,7 @@ also appear embedded in `installer.ps1` (offline fallback manifest; CI checks
 both). Regenerate with:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-Manifest.ps1 -DnsproxyTag v0.85.0 -ZapretTag v72.13
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-Manifest.ps1 -DnsproxyTag v0.86.0 -ZapretTag v72.13
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-Manifest.ps1 -SkipDownload  # re-sync only
 ```
 
