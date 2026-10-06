@@ -68,7 +68,7 @@ try {
 # SEDG_INSTALL_PATH / SEDG_MANIFEST_URL only override them when explicitly
 # set (optional, for tests and packaging - nothing requires them).
 
-$script:InstallerVersion = '1.1.1'
+$script:InstallerVersion = '1.1.2'
 if (-not [string]::IsNullOrWhiteSpace($env:SEDG_INSTALL_PATH)) {
     $script:InstallPath = $env:SEDG_INSTALL_PATH
 } else {
@@ -3486,9 +3486,10 @@ function Show-MainMenu {
     & $row '7' 'MiUpstream'  '8' 'MiSysDns'   '9' 'MiCdn'
     Write-BoxLine '' $w
     & $row '10' 'MiUninstall' '' '' '11' 'MiLang'
-    # Exit lives in its own fixed band, set off by double rules.
+    # Exit lives in its own fixed band, set off by double rules. The single
+    # leading space keeps its bracket column aligned with the action grid.
     Write-BoxSeparator $w
-    Write-BoxLine ('  [ 0] ' + (T 'MiExit')) $w
+    Write-BoxLine (' [ 0] ' + (T 'MiExit')) $w
     Write-BoxSeparator $w
     foreach ($statusRow in @(Get-MenuStatusPanel)) {
         Write-BoxLine ('  ' + ([string]$statusRow.Label).PadRight(12) + $statusRow.Value) $w $statusRow.Color

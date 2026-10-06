@@ -839,6 +839,11 @@ Describe 'Manager menu UI (rendered)' {
         $sep = [string][char]0x2560
         $lines[$exitIdx - 1] | Should -BeLike "$sep*"
         $lines[$exitIdx + 1] | Should -BeLike "$sep*"
+        # The exit bracket column must align with the action grid's column.
+        $vt = [string][char]0x2551
+        $lines[$exitIdx] | Should -Match ("^$vt \[ 0\] Exit\s*$vt$")
+        $gridIdx = [array]::IndexOf($lines, ($lines | Where-Object { $_ -match '\[ 1\] Install' } | Select-Object -First 1))
+        $lines[$gridIdx] | Should -Match "^$vt \[ 1\] Install"
     }
 
     It 'colors the status rows by state' {
