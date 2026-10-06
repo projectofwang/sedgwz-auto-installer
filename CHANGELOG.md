@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-10-06
+
+- The [0] Exit row now sits in the same bracket column as the action
+  grid instead of one space to the right.
+
 ## [1.1.1] - 2026-10-06
 
 - Menu numbering now reads row-major: 1-9 fill the three-column grid
