@@ -73,7 +73,8 @@ jobs:
           $sums = Get-Content -LiteralPath (Join-Path $tmp 'SHA256SUMS')
           $checked = 0
           foreach ($line in $sums) {
-            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            # The file carries a "# SHA256SUMS for vX.Y.Z (<commit>)" header.
+            if ([string]::IsNullOrWhiteSpace($line) -or ($line.TrimStart().StartsWith('#'))) { continue }
             $parts = $line -split '\s+', 2
             if ($parts.Count -lt 2) { throw "malformed SHA256SUMS line: $line" }
             $hash = $parts[0].Trim().ToLowerInvariant()

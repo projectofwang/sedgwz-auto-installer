@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Release verification step now skips the SHA256SUMS header comment
+  (v1.0.7's run failed on it after the release itself had already been
+  published correctly; assets were verified manually).
+
 ## [1.0.7] - 2026-10-06
 
 - Fixed manager self-update handoff: the new manager's menu now replaces
