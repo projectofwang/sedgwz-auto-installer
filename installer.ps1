@@ -648,14 +648,36 @@ function Assert-ManifestComponents($Manifest) {
             }
         }
     }
-    # M12: primary NSSM URL must be https; mirror (if present) must be https.
+    # M12: primary NSSM URL must be https (loopback http allowed for the CI
+    # fixture server, see Test-DownloadUrl); mirror (if present) likewise.
     $nssm = Get-ManifestProperty $components 'nssm'
     $url = Get-ManifestString $nssm 'url'
-    if ($url -notmatch '^https://') { throw "Approved manifest nssm.url must be https." }
+    if (-not (Test-DownloadUrl $url)) { throw "Approved manifest nssm.url must be https." }
     $mirror = Get-ManifestString $nssm 'mirror'
-    if ((-not [string]::IsNullOrWhiteSpace($mirror)) -and ($mirror -notmatch '^https://')) {
+    if ((-not [string]::IsNullOrWhiteSpace($mirror)) -and (-not (Test-DownloadUrl $mirror))) {
         throw "Approved manifest nssm.mirror must be https."
     }
+}
+
+function Test-DownloadUrl([string]$Url) {
+    # https is always allowed. Plain http is allowed only for loopback hosts
+    # (the CI fixture server); loopback is local-machine only, so this never
+    # widens the attack surface for a user download path.
+    if ([string]::IsNullOrWhiteSpace($Url)) { return $false }
+    if ($Url -match '^https://') { return $true }
+    return ($Url -match '^http://(localhost|127\.0\.0\.1|\[::1\])(/|:|$)')
+}
+
+function Get-AssetDownloadBase {
+    # Test/packaging seam: SEDG_ASSET_BASE_URL redirects component downloads
+    # to an alternative origin (a CI fixture server). Unset in production:
+    # downloads stay pinned to https://github.com. Repository/tag/asset
+    # allow-listing and per-file SHA-256 pinning still apply regardless of
+    # the origin, so the seam only changes where bytes come from, not which
+    # bytes are accepted.
+    $base = [string]$env:SEDG_ASSET_BASE_URL
+    if ([string]::IsNullOrWhiteSpace($base)) { return 'https://github.com' }
+    return $base.TrimEnd('/')
 }
 
 function Get-ReleaseAssetUrl([string]$Repository, [string]$Tag, [string]$Asset) {
@@ -670,7 +692,7 @@ function Get-ReleaseAssetUrl([string]$Repository, [string]$Tag, [string]$Asset) 
     if ([string]::IsNullOrWhiteSpace($Asset) -or ($Asset -notmatch '^[\w][\w.\-]*$')) {
         throw "Invalid release asset name: $Asset"
     }
-    return "https://github.com/$Repository/releases/download/$Tag/$Asset"
+    return "{0}/{1}/releases/download/{2}/{3}" -f (Get-AssetDownloadBase), $Repository, $Tag, $Asset
 }
 
 function Get-ApprovedManifest {
@@ -702,6 +724,7 @@ function Get-ApprovedManifest {
     }
 
     $m = $null
+    $fetchErrors = @()
     foreach ($uri in @($script:Sources.Manifest, $script:Sources.ManifestFallback)) {
         if ([string]::IsNullOrWhiteSpace($uri)) { continue }
         try {
@@ -709,7 +732,7 @@ function Get-ApprovedManifest {
             $m = $response.Content | ConvertFrom-Json
             break
         } catch {
-            $m = $null
+            $fetchErrors += ('{0}: {1}' -f $uri, $_.Exception.Message)
         }
     }
     if (-not $m) {
@@ -717,6 +740,9 @@ function Get-ApprovedManifest {
         # Keep it in sync with approved-releases.json when updating components.
         $m = $embedded
         Write-Host (('  ' + (T 'WarnManifestFallback'))) -ForegroundColor Yellow
+        foreach ($reason in $fetchErrors) {
+            Write-Host (('  ' + $reason)) -ForegroundColor DarkGray
+        }
     }
 
     if ($null -eq $m) {
@@ -774,7 +800,10 @@ function Verify-Sha256([string]$File,[string]$Expected,[string]$Label){
 }
 function Download-File([string]$Url, [string]$Destination) {
     # M12: every download URL must be https; curl enforces it, IWR branch too.
-    if ([string]::IsNullOrWhiteSpace($Url) -or ($Url -notmatch '^https://')) {
+    # Test seam: plain http is accepted only for loopback hosts (the CI
+    # fixture server) via Test-DownloadUrl.
+    $isLoopbackHttp = (-not ($Url -match '^https://'))
+    if ([string]::IsNullOrWhiteSpace($Url) -or (-not (Test-DownloadUrl $Url))) {
         throw "Refusing non-https download URL: $Url"
     }
     # GitHub release downloads can occasionally reset a PowerShell HTTP connection.
@@ -786,7 +815,10 @@ function Download-File([string]$Url, [string]$Destination) {
         Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
         try {
             if (Test-Path $curl) {
-                & $curl --fail --location --proto '=https' --proto-redir '=https' --retry 2 --retry-delay 2 --connect-timeout 20 --max-time 600 --output $Destination $Url
+                $proto = '=https'
+                $extra = @()
+                if ($isLoopbackHttp) { $proto = '=https,http'; $extra = @('--noproxy', '*') }
+                & $curl --fail --location --proto $proto --proto-redir $proto @extra --retry 2 --retry-delay 2 --connect-timeout 20 --max-time 600 --output $Destination $Url
                 if ($LASTEXITCODE -eq 0 -and (Test-Path $Destination)) {
                     return
                 }
@@ -1174,13 +1206,16 @@ function Get-OurProcesses {
 
 function Get-StaticDnsServers([string]$InterfaceGuid, [ValidateSet('Tcpip','Tcpip6')]$Stack) {
     # H4: registry NameServer is the only reliable static-DNS signal.
-    # Empty/missing = automatic (DHCP/RA). Returns string[].
+    # Empty/missing value = automatic (DHCP/RA) -> empty array. An unreadable
+    # key returns $null so callers can tell "unknown" apart from "DHCP".
+    # Every return is a single object (,@()) so pipeline unrolling cannot
+    # turn an empty array into $null.
     $key = "HKLM:\SYSTEM\CurrentControlSet\Services\$Stack\Parameters\Interfaces\$InterfaceGuid"
     try {
-        $v = (Get-ItemProperty -LiteralPath $key -Name NameServer -ErrorAction Stop).NameServer
-    } catch { return @() }
-    if ([string]::IsNullOrWhiteSpace([string]$v)) { return @() }
-    return @(([string]$v -split '[,\s]+' | Where-Object { $_ }))
+        $v = (Get-Item -LiteralPath $key -ErrorAction Stop).GetValue('NameServer')
+    } catch { return $null }
+    $servers = @([string]$v -split '[,\s]+' | Where-Object { $_ })
+    return ,$servers
 }
 
 function Log-Port53Owner {
@@ -1230,8 +1265,16 @@ function Backup-DnsSettings {
                         else { $v6 += [string]$a }
                     } catch { Write-Warning ('SEDG:Backup-DnsSettings: $parsed = [System.Net.IPAddress]::Parse([string]$a) if ($par... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
                 }
-                $regV4 = @(Get-StaticDnsServers $guid 'Tcpip')
-                $regV6 = @(Get-StaticDnsServers $guid 'Tcpip6')
+                $regV4 = Get-StaticDnsServers $guid 'Tcpip'
+                $regV6 = Get-StaticDnsServers $guid 'Tcpip6'
+                if (($null -eq $regV4) -or ($null -eq $regV6)) {
+                    # An unreadable registry key must not read as "DHCP": record
+                    # the live servers so a later restore re-applies them
+                    # instead of wiping the adapter to DHCP.
+                    Write-Warning ("Could not read static DNS from the registry for adapter '$($adapter.Name)'; recording its current servers as the restore baseline.")
+                    if ($null -eq $regV4) { $regV4 = @($v4) }
+                    if ($null -eq $regV6) { $regV6 = @($v6) }
+                }
                 $snapshot += [pscustomobject]@{
                     Name = $adapter.Name
                     InterfaceGuid = $guid
@@ -1266,8 +1309,12 @@ function Backup-DnsSettings {
 function Restore-DnsSettings {
     # Restore pre-install DNS (Uninstall/failure paths). Prefers the ProgramData
     # backup, then the legacy in-dir copy; matches by InterfaceGuid, then name.
-    # Never throws; worst case resets to DHCP.
+    # Never throws; worst case resets to DHCP. Sets $script:DnsRestoreIncomplete
+    # when the backup could not be fully replayed, so callers (Uninstall) know
+    # to keep the backup file for another attempt.
     $restoredAny = $false
+    $unmatchedEntries = $false
+    $script:DnsRestoreIncomplete = $false
     try {
         $backupPath = $null
         foreach ($candidate in @($script:DnsBackupSafe, $script:DnsBackupFile)) {
@@ -1287,7 +1334,7 @@ function Restore-DnsSettings {
                     if (-not $adapter -and (-not [string]::IsNullOrWhiteSpace($name))) {
                         $adapter = Get-NetAdapter -Name $name -ErrorAction Stop
                     }
-                    if (-not $adapter) { continue }
+                    if (-not $adapter) { $unmatchedEntries = $true; continue }
                     $targetName = $adapter.Name
                     $clean = { param($list) @($list | ForEach-Object { [string]$_ } | Where-Object { $_ -and ($script:BootstrapTainted -notcontains $_) }) }
                     $v4live = & $clean @($entry.V4Addresses)
@@ -1313,6 +1360,7 @@ function Restore-DnsSettings {
                         Set-AdapterDnsFamily $targetName IPv6 -Dhcp
                     }
                 } catch {
+                    $script:DnsRestoreIncomplete = $true
                     try {
                         if ($adapter) {
                             Set-AdapterDnsFamily $adapter.Name IPv4 -Dhcp
@@ -1322,7 +1370,11 @@ function Restore-DnsSettings {
                 }
             }
         }
-    } catch { Write-Warning ('SEDG:Restore-DnsSettings: $backupPath = $null foreach ($candidate in @($script:DnsBack... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+    } catch {
+        $script:DnsRestoreIncomplete = $true
+        Write-Warning ('SEDG:Restore-DnsSettings: $backupPath = $null foreach ($candidate in @($script:DnsBack... (' + $_.Exception.Message + ')'); Write-Verbose $_
+    }
+    if ($unmatchedEntries) { $script:DnsRestoreIncomplete = $true }
     if (-not $restoredAny) {
         try { Reset-DnsToDhcp } catch { Write-Warning ('SEDG:Restore-DnsSettings: Reset-DnsToDhcp (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         return
@@ -1363,15 +1415,52 @@ function Reset-DnsToDhcp {
     Write-Done 'DNS settings reset to DHCP.'
 }
 
+function Get-AdapterDnsSnapshot([int]$IfIndex) {
+    # Rollback input for the adapter mutation loops: per-family current DNS.
+    $v4 = @()
+    $v6 = @()
+    $rows = @(Get-DnsClientServerAddress -InterfaceIndex $IfIndex -ErrorAction Stop)
+    foreach ($a in @($rows | Select-Object -ExpandProperty ServerAddresses)) {
+        try {
+            $parsed = [System.Net.IPAddress]::Parse([string]$a)
+            if ($parsed.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork) { $v4 += [string]$a } else { $v6 += [string]$a }
+        } catch { Write-Warning ('Could not classify DNS server address for rollback: ' + [string]$a) }
+    }
+    return @{ V4 = $v4; V6 = $v6 }
+}
+
+function Restore-AdapterDnsSnapshot([string]$AdapterName, $Snapshot) {
+    # Best-effort undo for one adapter; empty families mean it was on DHCP.
+    if ($null -eq $Snapshot) {
+        Set-AdapterDnsFamily $AdapterName IPv4 -Dhcp
+        Set-AdapterDnsFamily $AdapterName IPv6 -Dhcp
+        return
+    }
+    Set-AdapterDnsBoth $AdapterName @($Snapshot.V4) @($Snapshot.V6)
+}
+
 function Set-LocalDns {
     Write-Step 'Switching to local DNS...'
     Write-Host (('  ' + (T 'InfoDnsTarget'))) -ForegroundColor DarkGray
     $adapters = @(Get-NetworkAdapters)
     if ($adapters.Count -eq 0) { $adapters = @(Get-NetworkAdapters -IncludeVirtual) }
     if ($adapters.Count -eq 0) { throw (T 'NoAdapters') }
+    $applied = @()
     foreach ($adapter in $adapters) {
         Write-Host (('  ' + (T 'LbAdapter') + ': ' + $adapter.Name)) -ForegroundColor DarkGray
-        Set-AdapterDnsBoth $adapter.Name @('127.0.0.1') @('::1')
+        $snapshot = $null
+        try { $snapshot = Get-AdapterDnsSnapshot $adapter.ifIndex } catch { Write-Warning ('Could not snapshot DNS on adapter ''' + $adapter.Name + ''': ' + $_.Exception.Message) }
+        try {
+            Set-AdapterDnsBoth $adapter.Name @('127.0.0.1') @('::1')
+        } catch {
+            # A mid-loop failure must not leave earlier adapters on a
+            # resolver that is not running yet.
+            foreach ($done in $applied) {
+                try { Restore-AdapterDnsSnapshot $done.Name $done.Snapshot } catch { Write-Warning ('Could not restore DNS on adapter ''' + $done.Name + ''': ' + $_.Exception.Message) }
+            }
+            throw
+        }
+        $applied += @{ Name = $adapter.Name; Snapshot = $snapshot }
     }
     Clear-DnsClientCache
     ipconfig /flushdns | Out-Null
@@ -1418,8 +1507,19 @@ function Set-InstallerBootstrapDns {
     $dnsV4 = @('1.1.1.1', '8.8.8.8')
     $dnsV6 = @('2606:4700:4700::1111', '2001:4860:4860::8888')
 
+    $applied = @()
     foreach ($adapter in $adapters) {
-        Set-AdapterDnsBoth $adapter.Name $dnsV4 $dnsV6
+        $snapshot = $null
+        try { $snapshot = Get-AdapterDnsSnapshot $adapter.ifIndex } catch { Write-Warning ('Could not snapshot DNS on adapter ''' + $adapter.Name + ''': ' + $_.Exception.Message) }
+        try {
+            Set-AdapterDnsBoth $adapter.Name $dnsV4 $dnsV6
+        } catch {
+            foreach ($done in $applied) {
+                try { Restore-AdapterDnsSnapshot $done.Name $done.Snapshot } catch { Write-Warning ('Could not restore DNS on adapter ''' + $done.Name + ''': ' + $_.Exception.Message) }
+            }
+            throw
+        }
+        $applied += @{ Name = $adapter.Name; Snapshot = $snapshot }
     }
 
     Clear-DnsClientCache
@@ -1714,7 +1814,7 @@ function Get-ConfiguredUpstream {
                 if ($line -match '^upstream:\s*$') { $inUpstream = $true; continue }
                 if ($inUpstream) {
                     if ($line -match '^\S') { break }
-                    if ($line -match '^\s*-\s*(\S+)\s*$') {
+                    if ($line -match '^\s*-\s*["'']?([^''"\s]+)["'']?\s*$') {
                         $configured = $Matches[1].Trim()
                         if (Test-DnsUpstream $configured) { return $configured }
                     }
@@ -2396,7 +2496,10 @@ function Create-Services {
     # boot. Early crashes self-heal via NSSM AppExit/SCM recovery below.
     sc.exe config $script:DnsProxyService depend= Tcpip 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Failed to configure dependency for $($script:DnsProxyService)." }
-    try { sc.exe config $script:DnsProxyService start= auto 2>$null | Out-Null } catch { Write-Warning ('SEDG:Create-Services: sc.exe config $script:DnsProxyService start= auto 2>$null | ... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+    try {
+        sc.exe config $script:DnsProxyService start= auto 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) { Write-Warning ("sc.exe could not set the start type for $($script:DnsProxyService) (exit code $LASTEXITCODE); NSSM already configured SERVICE_AUTO_START.") }
+    } catch { Write-Warning ('SEDG:Create-Services: sc.exe config $script:DnsProxyService start= auto 2>$null | ... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     # M10: least privilege. dnsproxy only binds 127.0.0.1:53, so prefer
     # LocalService; fall back to SYSTEM when the host refuses.
     # Boot fix: the install dir is admin-only (SYSTEM+Admin), so grant
@@ -2405,7 +2508,9 @@ function Create-Services {
     # while adapters still point at 127.0.0.1 (looks like no network).
     try {
         & icacls.exe $script:InstallPath /grant '*S-1-5-19:(OI)(CI)RX' | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "icacls could not grant LocalService read access on $($script:InstallPath) (exit code $LASTEXITCODE)." }
         & icacls.exe $script:DnsProxyPath /grant '*S-1-5-19:(OI)(CI)M' | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "icacls could not grant LocalService modify access on $($script:DnsProxyPath) (exit code $LASTEXITCODE)." }
         Invoke-Nssm @('set', $script:DnsProxyService, 'ObjectName', 'NT AUTHORITY\LocalService', '')
     } catch { Write-Warning ('SEDG:Create-Services: & icacls.exe $script:InstallPath /grant ''*S-1-5-19:(OI)(CI)R... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     # Boot resilience: restart the wrapper when the app exits early
@@ -2565,9 +2670,12 @@ function Remove-InstallDirectoryCleanly([string]$Path, [switch]$AllowSchedule) {
 
 function Update-ManagerFromDist([string]$ForAction) {
     # Self-update the local manager before Install/Update so an old manager
-    # never fails the version check and destroys a working setup. Best-effort:
-    # re-execs the new manager's menu in this console and returns; $false lets
-    # the caller continue its pending work in the same window.
+    # never fails the version check and destroys a working setup. On success
+    # the new manager's menu is re-execed in this console and $true is
+    # returned so the caller stops its own flow (never two interactive
+    # sessions over one stdin). $false lets the caller continue its pending
+    # work in the same window.
+    $handedOff = $false
     try {
         $distBase = $script:Sources.Manifest -replace '/approved-releases\.json$', ''
         if ([string]::IsNullOrWhiteSpace($distBase)) { return $false }
@@ -2597,12 +2705,20 @@ function Update-ManagerFromDist([string]$ForAction) {
         if ($Clean) { $reArgs += '-Clean' }
         if ($DnsOnly) { $reArgs += '-DnsOnly' }
         if ($script:Lang -in @('EN','VI')) { $reArgs += @('-Language', $script:Lang) }
+        # Hand the console to the new manager: release our mutex and transcript
+        # first so the child can take the installer mutex immediately (this
+        # process stays blocked in the child until its menu exits).
+        try { Exit-InstallerMutex } catch { Write-Warning ('SEDG:Update-ManagerFromDist: Exit-InstallerMutex (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        try { Stop-OpTranscript } catch { Write-Warning ('SEDG:Update-ManagerFromDist: Stop-OpTranscript (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        $script:InstallerMutex = $null; $script:MutexDepth = 0; $script:OpTranscript = $null
+        $handedOff = $true
         & powershell.exe @reArgs
+        return $true
     } catch {
+        if ($handedOff) { throw ('Manager handoff failed after self-update: ' + $_.Exception.Message) }
         Write-Host (('  Manager self-update skipped: ' + $_.Exception.Message)) -ForegroundColor Yellow
         return $false
     }
-    return $false
 }
 
 function Install-All {
@@ -2947,11 +3063,17 @@ function Uninstall-All {
     Write-Step 'Stopping services and restoring DNS...'
     Stop-AllServices
     try { Restore-DnsSettings } catch { Write-Warning ('SEDG:Uninstall-All: Restore-DnsSettings (' + $_.Exception.Message + ')'); Write-Verbose $_ }
-    try {
-        if (Test-Path -LiteralPath $script:DnsBackupSafe -PathType Leaf) {
-            Remove-Item -LiteralPath $script:DnsBackupSafe -Force -ErrorAction SilentlyContinue
-        }
-    } catch { Write-Warning ('SEDG:Uninstall-All: if (Test-Path -LiteralPath $script:DnsBackupSafe -PathType L... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+    if ($script:DnsRestoreIncomplete) {
+        # The backup is the only record of the user's original DNS; destroying
+        # it after a failed restore would leave nothing to recover from.
+        Write-Host (('  Original DNS could not be fully restored; keeping the backup for another attempt: ' + $script:DnsBackupSafe)) -ForegroundColor Yellow
+    } else {
+        try {
+            if (Test-Path -LiteralPath $script:DnsBackupSafe -PathType Leaf) {
+                Remove-Item -LiteralPath $script:DnsBackupSafe -Force -ErrorAction SilentlyContinue
+            }
+        } catch { Write-Warning ('SEDG:Uninstall-All: if (Test-Path -LiteralPath $script:DnsBackupSafe -PathType L... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+    }
     Set-GatewayEnabled $false
     Clear-WatchdogState
     Remove-Services

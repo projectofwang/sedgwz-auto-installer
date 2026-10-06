@@ -52,6 +52,7 @@ Import-InstallerFunction 'Start-AllServices'
 Import-InstallerFunction 'Stop-AllServices'
 Import-InstallerFunction 'Remove-Services'
 Import-InstallerFunction 'Create-Services'
+Import-InstallerFunction 'Write-WatchdogFile'
 
 # Global recording stubs for every system-touching command the code under test
 # reaches. Installed at run phase only; removed in AfterAll so the shared
@@ -112,8 +113,10 @@ BeforeAll {
     }
     function global:Get-StaticDnsServers { param($InterfaceGuid, $Stack)
         $global:SedgTestCalls += "Get-StaticDnsServers:$Stack"
-        if ([string]$Stack -eq 'Tcpip') { return @('10.0.0.1') }
-        return @()
+        # ,@() mirrors the real contract: an empty array must survive
+        # pipeline unrolling instead of reading as $null (unreadable key).
+        if ([string]$Stack -eq 'Tcpip') { return ,@('10.0.0.1') }
+        return ,@()
     }
     function global:Set-SecureAcl { param($Path, $AdminOnly) $global:SedgTestCalls += 'Set-SecureAcl' }
     function global:Set-AdapterDnsStatic { param($AdapterName, $V4, $V6)
@@ -454,5 +457,178 @@ Describe 'Service lifecycle (mocked)' {
         @($global:SedgTestCalls | Where-Object { $_ -like 'sc.exe:failure *' }).Count | Should -Be 2
         @($global:SedgTestCalls | Where-Object { $_ -like 'sc.exe:failureflag*' }).Count | Should -Be 2
         $global:SedgTestCalls | Should -Not -Contain 'Stop-Process'
+    }
+}
+
+Describe 'Cloudflare deploy config parity' {
+    It 'wrangler.toml and cloudflare.config.ts agree on name, compat date, route and zone' {
+        $root = Split-Path -Parent $PSScriptRoot
+        $toml = Get-Content -LiteralPath (Join-Path $root 'cloudflare/wrangler.toml') -Raw
+        $ts = Get-Content -LiteralPath (Join-Path $root 'cloudflare/cloudflare.config.ts') -Raw
+        $tomlName = [regex]::Match($toml, '(?m)^\s*name\s*=\s*"([^"]+)"').Groups[1].Value
+        $tsName = [regex]::Match($ts, 'name:\s*"([^"]+)"').Groups[1].Value
+        $tomlName | Should -Not -BeNullOrEmpty
+        $tomlName | Should -Be $tsName
+        $tomlDate = [regex]::Match($toml, '(?m)^\s*compatibility_date\s*=\s*"([^"]+)"').Groups[1].Value
+        $tsDate = [regex]::Match($ts, 'compatibilityDate:\s*"([^"]+)"').Groups[1].Value
+        $tomlDate | Should -Not -BeNullOrEmpty
+        $tomlDate | Should -Be $tsDate
+        $tomlPattern = [regex]::Match($toml, 'pattern\s*=\s*"([^"]+)"').Groups[1].Value
+        $tsPattern = [regex]::Match($ts, 'pattern:\s*"([^"]+)"').Groups[1].Value
+        $tomlPattern | Should -Not -BeNullOrEmpty
+        $tomlPattern | Should -Be $tsPattern
+        $tomlZone = [regex]::Match($toml, 'zone_name\s*=\s*"([^"]+)"').Groups[1].Value
+        $tsZone = [regex]::Match($ts, 'zone:\s*"([^"]+)"').Groups[1].Value
+        $tomlZone | Should -Not -BeNullOrEmpty
+        $tomlZone | Should -Be $tsZone
+    }
+    It 'wrangler.toml and wrangler.config.ts agree on the assets directory' {
+        $root = Split-Path -Parent $PSScriptRoot
+        $toml = Get-Content -LiteralPath (Join-Path $root 'cloudflare/wrangler.toml') -Raw
+        $wts = Get-Content -LiteralPath (Join-Path $root 'cloudflare/wrangler.config.ts') -Raw
+        $tomlDir = [regex]::Match($toml, '(?m)^\s*directory\s*=\s*"([^"]+)"').Groups[1].Value
+        $wtsDir = [regex]::Match($wts, 'assetsDirectory:\s*"([^"]+)"').Groups[1].Value
+        $tomlDir | Should -Not -BeNullOrEmpty
+        $tomlDir | Should -Be $wtsDir
+    }
+}
+
+Describe 'Watchdog script (generated, executed against stubs)' {
+    BeforeAll {
+        # The generated script calls exit; the call operator keeps that inside
+        # the script. Bypass policy so in-process script execution always runs.
+        Set-ExecutionPolicy -Scope Process Bypass -Force
+        $global:SedgServices = @{}
+        $global:SedgWatchdogDns = @('127.0.0.1')
+        $global:SedgDnsHealthy = $true
+        $global:SedgWatchdogCalls = @()
+
+        function global:Get-Service { param($Name, $ErrorAction)
+            $global:SedgWatchdogCalls += "Get-Service:$Name"
+            return $global:SedgServices[$Name]
+        }
+        function global:Start-Service { param($Name, $ErrorAction) $global:SedgWatchdogCalls += "Start-Service:$Name" }
+        function global:Start-Sleep { param($Seconds) }
+        function global:Resolve-DnsName { param($Name, $Server, [switch]$DnsOnly, [switch]$QuickTimeout, $ErrorAction)
+            $global:SedgWatchdogCalls += "Resolve:$Name"
+            if (-not $global:SedgDnsHealthy) { throw 'DNS query timed out' }
+            return [pscustomobject]@{ Name = $Name }
+        }
+        function global:Get-NetAdapter { param([switch]$Physical, $ErrorAction)
+            $global:SedgWatchdogCalls += ('Get-NetAdapter:' + [bool]$Physical)
+            return [pscustomobject]@{ Name = 'Ethernet'; ifIndex = 7; Status = 'Up'; InterfaceDescription = 'Realtek PCIe GbE' }
+        }
+        function global:Get-DnsClientServerAddress { param($InterfaceIndex, $ErrorAction)
+            $global:SedgWatchdogCalls += 'Get-DnsClientServerAddress'
+            return [pscustomobject]@{ ServerAddresses = $global:SedgWatchdogDns }
+        }
+        function global:Set-DnsClientServerAddress { param($InterfaceIndex, $ServerAddresses, $ErrorAction)
+            $global:SedgWatchdogCalls += ('SetDnsLocal:' + (@($ServerAddresses) -join ','))
+        }
+        function global:netsh.exe { $global:SedgWatchdogCalls += ('netsh:' + ($args -join ' ')); $global:LASTEXITCODE = 0 }
+        function global:ipconfig { $global:SedgWatchdogCalls += 'ipconfig' }
+        function global:Clear-DnsClientCache { $global:SedgWatchdogCalls += 'Clear-DnsClientCache' }
+
+        # Generate the real script through the real writer into $TestDrive.
+        $script:InstallPath = Join-Path $TestDrive 'watchdog-install'
+        New-Item -ItemType Directory -Path $script:InstallPath -Force | Out-Null
+        $script:WatchdogScript = Join-Path $script:InstallPath 'watchdog.ps1'
+        Write-WatchdogFile
+    }
+    AfterAll {
+        foreach ($n in @('Get-Service', 'Start-Service', 'Start-Sleep', 'Resolve-DnsName',
+                'Get-NetAdapter', 'Get-DnsClientServerAddress', 'Set-DnsClientServerAddress',
+                'netsh.exe', 'ipconfig', 'Clear-DnsClientCache')) {
+            Remove-Item -LiteralPath ("Function:\{0}" -f $n) -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'healthy run restarts stopped auto services and clears the failure counter' {
+        Set-Content -LiteralPath (Join-Path $script:InstallPath 'gateway-enabled') -Value 'on' -Encoding ASCII
+        Set-Content -LiteralPath (Join-Path $script:InstallPath 'state.json') -Value '{"Upstream":"https://dns.example/dns-query"}' -Encoding ASCII
+        $global:SedgServices = @{
+            'winws-service'    = [pscustomobject]@{ Name = 'winws-service'; Status = 'Stopped'; StartType = 'Automatic' }
+            'dnsproxy-service' = [pscustomobject]@{ Name = 'dnsproxy-service'; Status = 'Stopped'; StartType = 'Automatic' }
+        }
+        $global:SedgWatchdogDns = @('127.0.0.1')
+        $global:SedgDnsHealthy = $true
+        Remove-Item -LiteralPath (Join-Path $script:InstallPath 'watchdog-count.txt'), (Join-Path $script:InstallPath 'watchdog-fallback.flag'), (Join-Path $script:InstallPath 'fail-closed') -Force -ErrorAction SilentlyContinue
+        $global:SedgWatchdogCalls = @()
+
+        & $script:WatchdogScript
+
+        $global:SedgWatchdogCalls | Should -Contain 'Start-Service:winws-service'
+        $global:SedgWatchdogCalls | Should -Contain 'Start-Service:dnsproxy-service'
+        $global:SedgWatchdogCalls | Should -Contain 'Resolve:dns.example'
+        Test-Path -LiteralPath (Join-Path $script:InstallPath 'watchdog-count.txt') | Should -BeFalse
+        Test-Path -LiteralPath (Join-Path $script:InstallPath 'watchdog-fallback.flag') | Should -BeFalse
+    }
+
+    It 'fails open to DHCP after 3 consecutive health-check failures' {
+        Set-Content -LiteralPath (Join-Path $script:InstallPath 'gateway-enabled') -Value 'on' -Encoding ASCII
+        $global:SedgServices = @{
+            'winws-service'    = [pscustomobject]@{ Name = 'winws-service'; Status = 'Running'; StartType = 'Automatic' }
+            'dnsproxy-service' = [pscustomobject]@{ Name = 'dnsproxy-service'; Status = 'Running'; StartType = 'Automatic' }
+        }
+        $global:SedgWatchdogDns = @('127.0.0.1')
+        $global:SedgDnsHealthy = $false
+        Remove-Item -LiteralPath (Join-Path $script:InstallPath 'watchdog-fallback.flag'), (Join-Path $script:InstallPath 'fail-closed') -Force -ErrorAction SilentlyContinue
+        Set-Content -LiteralPath (Join-Path $script:InstallPath 'watchdog-count.txt') -Value '2' -Encoding ASCII -NoNewline
+        $global:SedgWatchdogCalls = @()
+
+        & $script:WatchdogScript
+
+        Get-Content -LiteralPath (Join-Path $script:InstallPath 'watchdog-count.txt') -Raw | Should -Be '3'
+        @($global:SedgWatchdogCalls | Where-Object { $_ -like 'netsh:*source=dhcp*' }).Count | Should -Be 2
+        Test-Path -LiteralPath (Join-Path $script:InstallPath 'watchdog-fallback.flag') | Should -BeTrue
+    }
+
+    It 'fail-closed marker keeps local DNS instead of falling back' {
+        Set-Content -LiteralPath (Join-Path $script:InstallPath 'gateway-enabled') -Value 'on' -Encoding ASCII
+        Set-Content -LiteralPath (Join-Path $script:InstallPath 'fail-closed') -Value 'fail-closed' -Encoding ASCII
+        $global:SedgServices = @{
+            'winws-service'    = [pscustomobject]@{ Name = 'winws-service'; Status = 'Running'; StartType = 'Automatic' }
+            'dnsproxy-service' = [pscustomobject]@{ Name = 'dnsproxy-service'; Status = 'Running'; StartType = 'Automatic' }
+        }
+        $global:SedgWatchdogDns = @('127.0.0.1')
+        $global:SedgDnsHealthy = $false
+        Remove-Item -LiteralPath (Join-Path $script:InstallPath 'watchdog-fallback.flag') -Force -ErrorAction SilentlyContinue
+        Set-Content -LiteralPath (Join-Path $script:InstallPath 'watchdog-count.txt') -Value '2' -Encoding ASCII -NoNewline
+        $global:SedgWatchdogCalls = @()
+
+        & $script:WatchdogScript
+
+        Get-Content -LiteralPath (Join-Path $script:InstallPath 'watchdog-count.txt') -Raw | Should -Be '3'
+        @($global:SedgWatchdogCalls | Where-Object { $_ -like 'netsh:*' }) | Should -BeNullOrEmpty
+        Test-Path -LiteralPath (Join-Path $script:InstallPath 'watchdog-fallback.flag') | Should -BeFalse
+    }
+
+    It 'recovers adapters and clears the flag when DNS is healthy after a fallback' {
+        Set-Content -LiteralPath (Join-Path $script:InstallPath 'gateway-enabled') -Value 'on' -Encoding ASCII
+        Set-Content -LiteralPath (Join-Path $script:InstallPath 'watchdog-fallback.flag') -Value 'fallback' -Encoding ASCII
+        $global:SedgServices = @{
+            'winws-service'    = [pscustomobject]@{ Name = 'winws-service'; Status = 'Running'; StartType = 'Automatic' }
+            'dnsproxy-service' = [pscustomobject]@{ Name = 'dnsproxy-service'; Status = 'Running'; StartType = 'Automatic' }
+        }
+        # Adapter was switched to DHCP DNS by the earlier fail-open.
+        $global:SedgWatchdogDns = @('192.168.50.1')
+        $global:SedgDnsHealthy = $true
+        Remove-Item -LiteralPath (Join-Path $script:InstallPath 'fail-closed') -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath (Join-Path $script:InstallPath 'watchdog-count.txt') -Force -ErrorAction SilentlyContinue
+        $global:SedgWatchdogCalls = @()
+
+        & $script:WatchdogScript
+
+        $global:SedgWatchdogCalls | Should -Contain 'SetDnsLocal:127.0.0.1,::1'
+        Test-Path -LiteralPath (Join-Path $script:InstallPath 'watchdog-fallback.flag') | Should -BeFalse
+    }
+
+    It 'does nothing when the gateway is disabled' {
+        Remove-Item -LiteralPath (Join-Path $script:InstallPath 'gateway-enabled') -Force -ErrorAction SilentlyContinue
+        $global:SedgWatchdogCalls = @()
+
+        & $script:WatchdogScript
+
+        $global:SedgWatchdogCalls | Should -BeNullOrEmpty
     }
 }

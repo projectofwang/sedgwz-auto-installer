@@ -41,6 +41,10 @@ Import-InstallerFunction 'Enter-InstallerMutex'
 Import-InstallerFunction 'Exit-InstallerMutex'
 Import-InstallerFunction 'Get-OurProcesses'
 Import-InstallerFunction 'Get-StaticDnsServers'
+Import-InstallerFunction 'Get-ConfiguredUpstream'
+Import-InstallerFunction 'Get-AssetDownloadBase'
+Import-InstallerFunction 'Test-DownloadUrl'
+Import-InstallerFunction 'Download-File'
 
 Describe 'Test-DnsUpstream' {
     It 'accepts https/tls/h3/quic URLs' {
@@ -68,6 +72,62 @@ Describe 'Get-ReleaseAssetUrl' {
         { Get-ReleaseAssetUrl 'AdguardTeam/dnsproxy' 'v1;evil' 'a.zip' } | Should -Throw
         { Get-ReleaseAssetUrl 'AdguardTeam/dnsproxy' 'v1' '../a.zip' } | Should -Throw
         { Get-ReleaseAssetUrl 'AdguardTeam/dnsproxy' '' 'a.zip' } | Should -Throw
+    }
+}
+
+Describe 'Get-ConfiguredUpstream' {
+    It 'parses quoted and unquoted YAML upstream entries' {
+        $script:ConfigFile = Join-Path $TestDrive 'upstream-config.yaml'
+        $script:StateFile = Join-Path $TestDrive 'upstream-state.json'
+        @"
+upstream:
+  - "https://dns.example/dns-query"
+
+fallback:
+  - "https://fallback.example/dns-query"
+"@ | Set-Content -LiteralPath $script:ConfigFile
+        (Get-ConfiguredUpstream) | Should -Be 'https://dns.example/dns-query'
+
+        @"
+upstream:
+  - tls://dns.example
+"@ | Set-Content -LiteralPath $script:ConfigFile
+        (Get-ConfiguredUpstream) | Should -Be 'tls://dns.example'
+    }
+}
+
+Describe 'Asset download seam' {
+    It 'defaults to pinned github URLs' {
+        Remove-Item Env:SEDG_ASSET_BASE_URL -ErrorAction SilentlyContinue
+        $script:AllowedReleaseRepos = @('AdguardTeam/dnsproxy', 'bol-van/zapret')
+        (Get-AssetDownloadBase) | Should -Be 'https://github.com'
+        (Get-ReleaseAssetUrl 'AdguardTeam/dnsproxy' 'v0.86.0' 'a.zip') | Should -Be 'https://github.com/AdguardTeam/dnsproxy/releases/download/v0.86.0/a.zip'
+    }
+    It 'redirects asset downloads when SEDG_ASSET_BASE_URL is set (allow-list still enforced)' {
+        $env:SEDG_ASSET_BASE_URL = 'http://127.0.0.1:18081'
+        try {
+            $script:AllowedReleaseRepos = @('AdguardTeam/dnsproxy', 'bol-van/zapret')
+            (Get-ReleaseAssetUrl 'AdguardTeam/dnsproxy' 'v0.86.0' 'a.zip') | Should -Be 'http://127.0.0.1:18081/AdguardTeam/dnsproxy/releases/download/v0.86.0/a.zip'
+            { Get-ReleaseAssetUrl 'evil/repo' 'v1' 'a.zip' } | Should -Throw
+        } finally {
+            Remove-Item Env:SEDG_ASSET_BASE_URL -ErrorAction SilentlyContinue
+        }
+    }
+    It 'Download-File refuses non-https URLs except loopback hosts' {
+        $dest = Join-Path $TestDrive 'seam-dl.bin'
+        { Download-File '' $dest } | Should -Throw
+        { Download-File 'ftp://example.com/x' $dest } | Should -Throw
+        { Download-File 'http://example.com/x' $dest } | Should -Throw
+        { Download-File 'http://evil.example.com/x' $dest } | Should -Throw
+    }
+    It 'Test-DownloadUrl allows https and loopback http only' {
+        (Test-DownloadUrl 'https://github.com/a/b') | Should -BeTrue
+        (Test-DownloadUrl 'http://127.0.0.1:18081/a.zip') | Should -BeTrue
+        (Test-DownloadUrl 'http://localhost:18081/a.zip') | Should -BeTrue
+        (Test-DownloadUrl 'http://example.com/a.zip') | Should -BeFalse
+        (Test-DownloadUrl 'http://127.0.0.1.evil.com/a.zip') | Should -BeFalse
+        (Test-DownloadUrl 'ftp://127.0.0.1/a.zip') | Should -BeFalse
+        (Test-DownloadUrl '') | Should -BeFalse
     }
 }
 
@@ -114,6 +174,13 @@ Describe 'Manifest shape' {
         $m.components.nssm.url = 'http://nssm.cc/release/nssm-2.24.zip'
         { Assert-ManifestComponents $m } | Should -Throw
     }
+    It 'accepts loopback http nssm urls for the CI fixture server' {
+        $m = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $global:SEDGInstallerPath) 'approved-releases.json') -Raw | ConvertFrom-Json
+        $m.components.nssm.url = 'http://127.0.0.1:18081/nssm-2.24.zip'
+        { Assert-ManifestComponents $m } | Should -Not -Throw
+        $m.components.nssm.url = 'http://example.com/nssm-2.24.zip'
+        { Assert-ManifestComponents $m } | Should -Throw
+    }
     It 'embedded manifest matches approved-releases.json components' {
         $manifest = Get-Content -LiteralPath (Join-Path (Split-Path -Parent $global:SEDGInstallerPath) 'approved-releases.json') -Raw | ConvertFrom-Json
         $src = Get-Content -LiteralPath $global:SEDGInstallerPath -Raw
@@ -121,6 +188,17 @@ Describe 'Manifest shape' {
             $src | Should -Match ([regex]::Escape($pair[1]))
             $src | Should -Match ([regex]::Escape($pair[2]))
         }
+        # NSSM pins live in script constants the embedded block references;
+        # compare those constants exactly against the manifest.
+        $verPattern = [regex]::Escape('$script:NssmVersion') + "\s*=\s*'([^']+)'"
+        $ver = [regex]::Match($src, $verPattern).Groups[1].Value
+        $shaPattern = [regex]::Escape('$script:NssmSha256') + "\s*=\s*'([0-9a-f]{64})'"
+        $sha = [regex]::Match($src, $shaPattern).Groups[1].Value
+        $urlPattern = [regex]::Escape('NssmZip') + "\s*=\s*'([^']+)'"
+        $url = [regex]::Match($src, $urlPattern).Groups[1].Value
+        $ver | Should -Be $manifest.components.nssm.version
+        $sha | Should -Be $manifest.components.nssm.sha256
+        $url | Should -Be $manifest.components.nssm.url
     }
 }
 
