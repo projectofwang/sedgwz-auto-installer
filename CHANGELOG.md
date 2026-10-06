@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-06
+
+- Menu numbering now reads row-major: 1-9 fill the three-column grid
+  in visual order, 10-11 sit on their own row, and [0] Exit lives in
+  its own fixed band set off by double rules.
+
 ## [1.1.0] - 2026-10-06
 
 - Manager menu redesign: three-column action grid with aligned

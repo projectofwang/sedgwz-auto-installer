@@ -812,15 +812,33 @@ Describe 'Manager menu UI (rendered)' {
         $global:SedgMenuLines = @()
         Show-MainMenu
         $text = (($global:SedgMenuLines | ForEach-Object { $_.Text }) -join "`n")
-        $text | Should -Match '\[ 1\] Install'
+        # 1-9 read row-major: [1][2][3] share the first row.
+        $row1 = @($global:SedgMenuLines | Where-Object { $_.Text -match '\[ 1\] Install' })[0].Text
+        $row1 | Should -Match '\[ 2\] Update'
+        $row1 | Should -Match '\[ 3\] Status'
+        $text | Should -Match '\[ 4\] Restart'
+        $text | Should -Match '\[ 7\] Upstream DNS'
         $text | Should -Match '\[10\] Uninstall'
         $text | Should -Match '\[11\] Language'
-        $text | Should -Match '\[ 0\] Exit'
         $text | Should -Match '\[OK\] dnsproxy   \[OK\] winws'
         $text | Should -Match 'Local DNS active \(127\.0\.0\.1\)'
         $text | Should -Match 'sdns\.example'
         $text | Should -Match 'THANKS TO BIBICADOTNET'
         $text | Should -Match 'Version: 1\.0\.9'
+        # Known labels must fit their columns: no truncation, no empty cells.
+        $text | Should -Not -Match '\.\.\.'
+        $text | Should -Not -Match '\[ {2}\]'
+    }
+
+    It 'keeps Exit in its own band between two double-rule separators' {
+        $global:SedgMenuLines = @()
+        Show-MainMenu
+        $lines = @($global:SedgMenuLines | ForEach-Object { $_.Text })
+        $exitIdx = [array]::IndexOf($lines, ($lines | Where-Object { $_ -match '\[ 0\] Exit' } | Select-Object -First 1))
+        $exitIdx | Should -BeGreaterThan 0
+        $sep = [string][char]0x2560
+        $lines[$exitIdx - 1] | Should -BeLike "$sep*"
+        $lines[$exitIdx + 1] | Should -BeLike "$sep*"
     }
 
     It 'colors the status rows by state' {

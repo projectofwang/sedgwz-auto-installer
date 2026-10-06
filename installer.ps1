@@ -68,7 +68,7 @@ try {
 # SEDG_INSTALL_PATH / SEDG_MANIFEST_URL only override them when explicitly
 # set (optional, for tests and packaging - nothing requires them).
 
-$script:InstallerVersion = '1.1.0'
+$script:InstallerVersion = '1.1.1'
 if (-not [string]::IsNullOrWhiteSpace($env:SEDG_INSTALL_PATH)) {
     $script:InstallPath = $env:SEDG_INSTALL_PATH
 } else {
@@ -3471,17 +3471,24 @@ function Show-MainMenu {
         $cells = ''
         $i = 0
         foreach ($cell in @(@($N1, $K1), @($N2, $K2), @($N3, $K3))) {
-            $text = (' [{0,2}] {1}' -f $cell[0], (T $cell[1]))
-            if ($text.Length -gt $colW[$i] - 1) { $text = $text.Substring(0, $colW[$i] - 4) + '...' }
+            $text = ''
+            if ($cell[1]) {
+                $text = (' [{0,2}] {1}' -f $cell[0], (T $cell[1]))
+                if ($text.Length -gt $colW[$i] - 1) { $text = $text.Substring(0, $colW[$i] - 4) + '...' }
+            }
             $cells += $text.PadRight($colW[$i])
             $i++
         }
         Write-BoxLine $cells $w
     }
-    & $row '1' 'MiInstall'  '5' 'MiPause'    '9'  'MiCdn'
-    & $row '2' 'MiUpdate'   '6' 'MiResume'   '10' 'MiUninstall'
-    & $row '3' 'MiStatus'   '7' 'MiUpstream' '11' 'MiLang'
-    & $row '4' 'MiRestart'  '8' 'MiSysDns'   '0'  'MiExit'
+    & $row '1' 'MiInstall'   '2' 'MiUpdate'   '3' 'MiStatus'
+    & $row '4' 'MiRestart'   '5' 'MiPause'    '6' 'MiResume'
+    & $row '7' 'MiUpstream'  '8' 'MiSysDns'   '9' 'MiCdn'
+    Write-BoxLine '' $w
+    & $row '10' 'MiUninstall' '' '' '11' 'MiLang'
+    # Exit lives in its own fixed band, set off by double rules.
+    Write-BoxSeparator $w
+    Write-BoxLine ('  [ 0] ' + (T 'MiExit')) $w
     Write-BoxSeparator $w
     foreach ($statusRow in @(Get-MenuStatusPanel)) {
         Write-BoxLine ('  ' + ([string]$statusRow.Label).PadRight(12) + $statusRow.Value) $w $statusRow.Color
