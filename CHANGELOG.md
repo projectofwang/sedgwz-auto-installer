@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.0.8] - 2026-10-06
+
 - Release verification step now skips the SHA256SUMS header comment
   (v1.0.7's run failed on it after the release itself had already been
   published correctly; assets were verified manually).

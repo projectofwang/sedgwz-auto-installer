@@ -68,7 +68,7 @@ try {
 # SEDG_INSTALL_PATH / SEDG_MANIFEST_URL only override them when explicitly
 # set (optional, for tests and packaging - nothing requires them).
 
-$script:InstallerVersion = '1.0.7'
+$script:InstallerVersion = '1.0.8'
 if (-not [string]::IsNullOrWhiteSpace($env:SEDG_INSTALL_PATH)) {
     $script:InstallPath = $env:SEDG_INSTALL_PATH
 } else {
