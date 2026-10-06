@@ -14,3 +14,6 @@ Thumbs.db
 
 # Pester -CI scratch output (regenerable)
 testResults.xml
+
+# Integration smoke fixture server root (regenerable)
+tests/integration/site/
