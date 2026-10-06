@@ -228,6 +228,18 @@ Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error -ExcludeRule PSAvoidUsing
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-Manifest.ps1 -SkipDownload
 ```
 
+### Integration smoke (CI)
+
+The `integration` workflow (manual dispatch, weekly schedule) runs the real
+installer end to end on a disposable Windows runner: `Install`, `Status`,
+`Restart`, and `Uninstall -Purge` with real NSSM services, the real watchdog
+scheduled task, and real DNS mutation and restore. Components are stub
+executables built from source by `tests/integration/Build-Fixtures.ps1` and
+served over loopback HTTP; NSSM itself is the real pinned archive. The
+installer's `SEDG_INSTALL_PATH` / `SEDG_MANIFEST_URL` / `SEDG_ASSET_BASE_URL`
+seams keep the run isolated, and per-file SHA-256 verification stays
+enforced throughout.
+
 `tools/Update-Manifest.ps1` accepts `-DnsproxyTag`, `-ZapretTag`,
 `-NssmVersion`, `-NssmUrl`, and `-SkipDownload`. Check
 [`approved-releases.json`](approved-releases.json) for the current pinned

@@ -17,9 +17,14 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: component-watch
+  cancel-in-progress: false
+
 jobs:
   check:
     runs-on: windows-latest
+    timeout-minutes: 20
     env:
       GH_TOKEN: ${{ secrets.COMPONENT_WATCH_TOKEN || secrets.GITHUB_TOKEN }}
       WATCH_BRANCH: auto/component-updates

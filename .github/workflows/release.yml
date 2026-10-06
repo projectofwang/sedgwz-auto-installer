@@ -18,10 +18,14 @@ permissions:
 jobs:
   publish:
     runs-on: windows-latest
+    timeout-minutes: 30
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Dispatch must build the tagged commit, not whatever main points at.
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
 
       - name: Build Cloudflare assets (Git Bash)
         shell: bash
@@ -56,3 +60,28 @@ jobs:
           # overwrite an existing release, fail loudly instead.
           if ($exists) { throw "release $tag already exists; tags are immutable, bump the version instead" }
           else { gh release create $tag --title $tag --generate-notes --latest $assets }
+
+      - name: Verify published assets (re-download, re-hash against SHA256SUMS)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = '${{ inputs.tag }}'
+          if ([string]::IsNullOrWhiteSpace($tag)) { $tag = '${{ github.ref_name }}' }
+          $tmp = Join-Path $env:RUNNER_TEMP ('release-verify-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+          gh release download $tag --dir $tmp --clobber
+          $sums = Get-Content -LiteralPath (Join-Path $tmp 'SHA256SUMS')
+          $checked = 0
+          foreach ($line in $sums) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            $parts = $line -split '\s+', 2
+            if ($parts.Count -lt 2) { throw "malformed SHA256SUMS line: $line" }
+            $hash = $parts[0].Trim().ToLowerInvariant()
+            $name = $parts[1].Trim().TrimStart('*')
+            $file = Join-Path $tmp $name
+            $actual = (Get-FileHash -LiteralPath $file -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+            if ($actual -ne $hash) { throw "published asset $name does not match SHA256SUMS (expected $hash, got $actual)" }
+            $checked++
+          }
+          if ($checked -lt 2) { throw "SHA256SUMS verified only $checked asset(s); refusing to trust an incomplete manifest" }
+          Write-Host "Verified $checked published asset(s) against SHA256SUMS."

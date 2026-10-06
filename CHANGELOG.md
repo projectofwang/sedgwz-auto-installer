@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+- Fixed manager self-update handoff: the new manager's menu now replaces
+  the old flow instead of both competing for the same console.
+- Fixed Uninstall keeping the DNS backup file when the restore could not
+  be fully replayed (it was deleted either way before).
+- Fixed LocalService ACL and start-type exit codes in Create-Services: a
+  refused grant now falls back to LocalSystem as documented.
+- Fixed DNS backup recording an unreadable static-DNS registry key as
+  "DHCP", which could wipe real static DNS on restore.
+- Fixed partial DNS switches (local/bootstrap) rolling back adapters
+  already changed when a later adapter fails mid-loop.
+- Fixed quoted upstream entries in `config.yaml` not being parsed.
+- Manifest download failures now log the host and reason before falling
+  back to the embedded manifest.
+- CI hardening: release dispatch now builds the tagged commit and
+  re-verifies uploaded assets against SHA256SUMS; embedded-manifest check
+  covers the NSSM pins; concurrency groups and job timeouts on all
+  workflows; Dependabot covers `cloudflare/`; `npm run deploy:cf:dry`
+  builds first instead of failing on a fresh clone.
+- New `integration` workflow: elevated end-to-end smoke on a disposable
+  Windows runner (Install, Status, Restart, Uninstall) against local stub
+  components, exercising real NSSM services, the watchdog task, and DNS
+  mutation and restore. The installer gains opt-in test seams
+  (`SEDG_ASSET_BASE_URL`, loopback http downloads) that are inert for
+  normal users; SHA-256 pinning stays enforced.
+- Landing page: WCAG AA contrast for small text, `aria-pressed` on the
+  language toggle, favicon, no-JS notice, dead code removed.
+- Tests: the generated watchdog script is now executed against stubs
+  (service restart, fail-open after 3 failures, fail-closed, recovery
+  from fallback, disabled no-op); Cloudflare config files are checked
+  for drift.
+
 ## [1.0.6] - 2026-10-05
 
 - Manager self-update now relaunches the new manager menu in the same

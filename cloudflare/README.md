@@ -40,9 +40,11 @@ with plain `cf build`.
 
 ## Endpoints
 
+- `https://dl.taiyuanwangjie.dpdns.org/` (landing page)
 - `https://dl.taiyuanwangjie.dpdns.org/installer.ps1`
 - `https://dl.taiyuanwangjie.dpdns.org/approved-releases.json`
 - `https://dl.taiyuanwangjie.dpdns.org/version.json`
+- `https://dl.taiyuanwangjie.dpdns.org/SHA256SUMS`
 
 Flow: GitHub `main` -> Workers Builds -> static assets -> `dl.` subdomain.
 The default DoH upstream is `https://sdns.taiyuanwangjie.dpdns.org/dns-query`;

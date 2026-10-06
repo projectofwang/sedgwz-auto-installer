@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>Serverless Edge DNS Gateway + Zapret — Install</title>
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="%2305070d"/><path d="M16 5l9 5v7c0 5.2-3.8 9.3-9 10-5.2-.7-9-4.8-9-10v-7z" fill="none" stroke="%23a78bfa" stroke-width="2.5"/><circle cx="16" cy="15" r="3" fill="%236ee7b7"/></svg>'>
 <style>
   :root {
     color-scheme: dark;
@@ -15,7 +16,7 @@
     --line-2: #2c3650;
     --text: #eef1f7;
     --muted: #98a2b8;
-    --dim: #626d84;
+    --dim: #7d88a0;
     --accent: #a78bfa;
     --accent-soft: rgba(167,139,250,.12);
     --blue: #2563eb;
@@ -209,6 +210,12 @@
 </head>
 <body>
   <canvas id="sky" aria-hidden="true"></canvas>
+  <noscript>
+    <div style="max-width:880px;margin:12px auto 0;padding:10px 14px;border:1px solid #2c3650;border-radius:8px;font:13px/1.5 system-ui,sans-serif;color:#98a2b8;">
+      JavaScript is off: the version badge is unavailable and copy buttons are inert, but every command on this page works as plain text. /
+      JavaScript đang tắt: không thấy phiên bản và nút sao chép không hoạt động, nhưng mọi lệnh trên trang vẫn dùng được bình thường.
+    </div>
+  </noscript>
   <div class="wrap">
     <div class="nav">
       <div class="badge" id="ver">version: loading…</div>
@@ -218,8 +225,8 @@
           <span>GitHub</span>
         </a>
         <div class="lang">
-          <button id="lang-en" type="button">EN</button>
-          <button id="lang-vi" type="button">VI</button>
+          <button id="lang-en" type="button" aria-pressed="true">EN</button>
+          <button id="lang-vi" type="button" aria-pressed="false">VI</button>
         </div>
       </div>
     </div>
@@ -304,6 +311,8 @@
     }
     document.getElementById('lang-en').className = lang === 'en' ? 'active' : '';
     document.getElementById('lang-vi').className = lang === 'vi' ? 'active' : '';
+    document.getElementById('lang-en').setAttribute('aria-pressed', lang === 'en' ? 'true' : 'false');
+    document.getElementById('lang-vi').setAttribute('aria-pressed', lang === 'vi' ? 'true' : 'false');
     renderVer();
   }
 
@@ -317,13 +326,6 @@
   function setLang(l) {
     lang = l === 'vi' ? 'vi' : 'en';
     try { localStorage.setItem('sedg-lang', lang); } catch (e) {}
-    var btns = document.querySelectorAll('button.copy');
-    for (var i = 0; i < btns.length; i++) {
-      if (btns[i].textContent !== 'Copy' && btns[i].textContent !== 'Sao chép' &&
-          btns[i].textContent !== 'Copied' && btns[i].textContent !== 'Đã chép') { continue; }
-      var v = btns[i].getAttribute(lang === 'vi' ? 'data-vi' : 'data-en');
-      if (v !== null) { btns[i].textContent = v; }
-    }
     applyLang();
   }
 

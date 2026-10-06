@@ -9,9 +9,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -76,7 +81,7 @@ jobs:
           foreach ($tag in @($m.components.dnsproxy.tag, $m.components.zapret.tag)) {
             if ($src -notmatch [regex]::Escape([string]$tag)) { throw "embedded manifest missing tag $tag" }
           }
-          foreach ($h in @($m.components.dnsproxy.sha256, $m.components.zapret.sha256)) {
+          foreach ($h in @($m.components.dnsproxy.sha256, $m.components.zapret.sha256, $m.components.nssm.sha256)) {
             if ($src -notmatch [regex]::Escape([string]$h)) { throw "embedded manifest missing hash $h" }
           }
 
@@ -107,6 +112,7 @@ jobs:
 
   cf-path:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
