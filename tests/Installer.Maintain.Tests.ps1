@@ -683,3 +683,73 @@ Describe 'DNS CIM-to-netsh fallback (mocked)' {
         ($global:SedgDnsFbCalls | Where-Object { $_ -like 'netsh:interface ipv6 set dnsservers name=Ethernet source=dhcp*' }).Count | Should -Be 1
     }
 }
+
+Describe 'Manager self-update (mocked)' {
+    # After a manager self-update the process must hand control back to the
+    # user (message + Exit-Installer), never re-exec a nested menu and never
+    # keep running with a stale version number.
+    BeforeAll {
+        Import-InstallerFunction 'Update-ManagerFromDist'
+        Import-InstallerFunction 'Test-OwnsProcessInvocation'
+        $global:SedgUpdateCalls = @()
+        function global:Invoke-RestMethod { param($Uri, $Headers, $TimeoutSec, $ErrorAction)
+            $global:SedgUpdateCalls += "Invoke-RestMethod:$Uri"
+            return [pscustomobject]@{ version = '9.9.9'; sha256 = ('a' * 64) }
+        }
+        function global:Download-File { param($Url, $Destination)
+            $global:SedgUpdateCalls += "Download-File:$Url"
+            'new-manager-content' | Set-Content -LiteralPath $Destination -Encoding ASCII
+        }
+        function global:Get-FileHash { param($LiteralPath, $Algorithm, $ErrorAction)
+            return [pscustomobject]@{ Hash = ('a' * 64) }
+        }
+        function global:Set-SecureAcl { param($Path, $AdminOnly) }
+        function global:Exit-InstallerMutex { $global:SedgUpdateCalls += 'Exit-InstallerMutex' }
+        function global:Stop-OpTranscript { $global:SedgUpdateCalls += 'Stop-OpTranscript' }
+        function global:Exit-Installer { param([int]$Code) $global:SedgUpdateCalls += "Exit-Installer:$Code" }
+        function global:Wait-HandoffClosePrompt { $global:SedgUpdateCalls += 'Wait-HandoffClosePrompt' }
+
+        $script:InstallPath = Join-Path $TestDrive 'selfupdate-install'
+        $script:TempPath = Join-Path $TestDrive 'selfupdate-staging'
+        New-Item -ItemType Directory -Path $script:InstallPath -Force | Out-Null
+        $script:InstallerVersion = '1.0.9'
+        $script:Sources = @{ Manifest = 'http://127.0.0.1:1/approved-releases.json' }
+        $script:Lang = 'EN'
+        $script:ForceUpdate = $false
+        $script:Clean = $false
+        $script:DnsOnly = $false
+    }
+    AfterAll {
+        foreach ($n in @('Invoke-RestMethod', 'Download-File', 'Get-FileHash', 'Set-SecureAcl',
+                'Exit-InstallerMutex', 'Stop-OpTranscript', 'Exit-Installer', 'Wait-HandoffClosePrompt')) {
+            Remove-Item -LiteralPath ("Function:\{0}" -f $n) -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'updates the manager, adopts the dist version, and ends the process for script invocations' {
+        $global:SedgUpdateCalls = @()
+        $script:OwnsProcessOverride = $true
+        $result = Update-ManagerFromDist 'Update'
+        $result | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path $script:InstallPath 'manager.ps1') | Should -BeTrue
+        $script:InstallerVersion | Should -Be '9.9.9'
+        $global:SedgUpdateCalls | Should -Contain 'Exit-InstallerMutex'
+        $global:SedgUpdateCalls | Should -Contain 'Stop-OpTranscript'
+        $global:SedgUpdateCalls | Should -Contain 'Wait-HandoffClosePrompt'
+        $global:SedgUpdateCalls | Should -Contain 'Exit-Installer:0'
+    }
+
+    It 'skips entirely when the dist version matches the running manager' {
+        $global:SedgUpdateCalls = @()
+        $script:InstallerVersion = '1.0.9'
+        $script:Sources = @{ Manifest = 'http://127.0.0.1:1/approved-releases.json' }
+        # Invoke-RestMethod now reports the same version as the installer.
+        function global:Invoke-RestMethod { param($Uri, $Headers, $TimeoutSec, $ErrorAction)
+            return [pscustomobject]@{ version = '1.0.9'; sha256 = ('a' * 64) }
+        }
+        $result = Update-ManagerFromDist 'Update'
+        $result | Should -BeFalse
+        $global:SedgUpdateCalls | Should -Not -Contain 'Exit-Installer:0'
+        $global:SedgUpdateCalls | Should -Not -Contain 'Download-File:http://127.0.0.1:1/installer.ps1'
+    }
+}

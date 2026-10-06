@@ -68,7 +68,7 @@ try {
 # SEDG_INSTALL_PATH / SEDG_MANIFEST_URL only override them when explicitly
 # set (optional, for tests and packaging - nothing requires them).
 
-$script:InstallerVersion = '1.0.8'
+$script:InstallerVersion = '1.0.9'
 if (-not [string]::IsNullOrWhiteSpace($env:SEDG_INSTALL_PATH)) {
     $script:InstallPath = $env:SEDG_INSTALL_PATH
 } else {
@@ -2700,14 +2700,33 @@ function Remove-InstallDirectoryCleanly([string]$Path, [switch]$AllowSchedule) {
     }
 }
 
+function Test-OwnsProcessInvocation {
+    # True for real script-file invocations (Gateway-Manager.bat, -File runs)
+    # whose process the installer may end; false for irm|iex hosts it must
+    # never kill (M5). OwnsProcessOverride exists for tests.
+    if ($script:OwnsProcessOverride) { return $script:OwnsProcessOverride }
+    return (-not [string]::IsNullOrEmpty($PSCommandPath))
+}
+
+function Wait-HandoffClosePrompt {
+    # After a manager self-update: give the user a moment to read the closing
+    # message before the console returns to the launcher. Skipped when input
+    # is redirected (CI, pipes).
+    if ([Console]::IsInputRedirected) { return }
+    try { Read-Host '  Press Enter to close this window' | Out-Null } catch { Write-Verbose $_ }
+}
+
 function Update-ManagerFromDist([string]$ForAction) {
     # Self-update the local manager before Install/Update so an old manager
-    # never fails the version check and destroys a working setup. On success
-    # the new manager's menu is re-execed in this console and $true is
-    # returned so the caller stops its own flow (never two interactive
-    # sessions over one stdin). $false lets the caller continue its pending
-    # work in the same window.
-    $handedOff = $false
+    # never fails the version check and destroys a working setup. After a
+    # successful update the new manager is NOT re-execed in this console:
+    # re-execing nests its menu inside the still-running Show-Menu loop,
+    # whose prompts keep stealing stdin, so the menu never comes back
+    # cleanly. Instead the message tells the user to start
+    # Gateway-Manager.bat again, and script-file invocations end the process
+    # here (irm|iex hosts cannot be killed, so those adopt the new version
+    # in memory and get $true to stop their pending flow). $false = no
+    # update happened, the caller continues.
     try {
         $distBase = $script:Sources.Manifest -replace '/approved-releases\.json$', ''
         if ([string]::IsNullOrWhiteSpace($distBase)) { return $false }
@@ -2732,22 +2751,23 @@ function Update-ManagerFromDist([string]$ForAction) {
         Remove-Item -LiteralPath $tmpManager -Force -ErrorAction SilentlyContinue
         Write-Done 'Local manager updated.'
 
-        $reArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"' + $managerPath + '"'), '-Action', 'Menu')
-        if ($ForceUpdate) { $reArgs += '-ForceUpdate' }
-        if ($Clean) { $reArgs += '-Clean' }
-        if ($DnsOnly) { $reArgs += '-DnsOnly' }
-        if ($script:Lang -in @('EN','VI')) { $reArgs += @('-Language', $script:Lang) }
-        # Hand the console to the new manager: release our mutex and transcript
-        # first so the child can take the installer mutex immediately (this
-        # process stays blocked in the child until its menu exits).
+        # Self-update done. Hand control back to the user: release our mutex
+        # and transcript, adopt the dist version in-memory (so a later action
+        # in this session stops self-updating and passes the manifest version
+        # check), tell the user to reopen the launcher, and end a script-file
+        # process here so the old Show-Menu loop cannot resume.
         try { Exit-InstallerMutex } catch { Write-Warning ('SEDG:Update-ManagerFromDist: Exit-InstallerMutex (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         try { Stop-OpTranscript } catch { Write-Warning ('SEDG:Update-ManagerFromDist: Stop-OpTranscript (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         $script:InstallerMutex = $null; $script:MutexDepth = 0; $script:OpTranscript = $null
-        $handedOff = $true
-        & powershell.exe @reArgs
+        $script:InstallerVersion = $distVersion
+        Write-Host ''
+        Write-Host (('  Manager updated to version {0}. Start Gateway-Manager.bat again to use the new menu.' -f $distVersion)) -ForegroundColor Yellow
+        if (Test-OwnsProcessInvocation) {
+            Wait-HandoffClosePrompt
+            Exit-Installer 0
+        }
         return $true
     } catch {
-        if ($handedOff) { throw ('Manager handoff failed after self-update: ' + $_.Exception.Message) }
         Write-Host (('  Manager self-update skipped: ' + $_.Exception.Message)) -ForegroundColor Yellow
         return $false
     }

@@ -37,7 +37,7 @@ Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error -ExcludeRule PSAvoidUsing
 
 ## Version and manifest parity
 
-Single version source: `installer.ps1` (`$script:InstallerVersion = '1.0.8'`).
+Single version source: `installer.ps1` (`$script:InstallerVersion = '1.0.9'`).
 These must stay in lockstep:
 
 - `approved-releases.json` -> `installer.version` (CI fails on mismatch).

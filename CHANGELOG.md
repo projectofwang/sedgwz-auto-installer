@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.0.9] - 2026-10-06
+
+- Fixed the manager self-update console trap: after updating, the
+  installer no longer re-execs the new menu inside the old one (the two
+  loops kept stealing stdin, so the menu never came back). It now prints
+  a closing message, ends the process, and the user starts
+  Gateway-Manager.bat again to use the new menu.
+
 ## [1.0.8] - 2026-10-06
 
 - Release verification step now skips the SHA256SUMS header comment
