@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-10-06
+
 - Fixed manager self-update handoff: the new manager's menu now replaces
   the old flow instead of both competing for the same console.
 - Fixed Uninstall keeping the DNS backup file when the restore could not
