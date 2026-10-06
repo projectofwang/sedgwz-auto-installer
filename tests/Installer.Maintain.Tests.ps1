@@ -753,3 +753,82 @@ Describe 'Manager self-update (mocked)' {
         $global:SedgUpdateCalls | Should -Not -Contain 'Download-File:http://127.0.0.1:1/installer.ps1'
     }
 }
+
+Describe 'Manager menu UI (rendered)' {
+    BeforeAll {
+        Import-InstallerFunction 'Show-MainMenu'
+        Import-InstallerFunction 'Get-MenuStatusPanel'
+        Import-InstallerFunction 'Write-CreditBanner'
+        Import-InstallerFunction 'Write-BoxTop'
+        Import-InstallerFunction 'Write-BoxLine'
+        Import-InstallerFunction 'Write-BoxSeparator'
+        Import-InstallerFunction 'Write-BoxBottom'
+        $global:SedgMenuLines = @()
+        # Recording Write-Host: capture text + color instead of silencing.
+        function global:Write-Host { param($Object, $ForegroundColor, $BackgroundColor, $NoNewline, $Separator)
+            $global:SedgMenuLines += @{ Text = ([string]$Object); Fg = $ForegroundColor }
+        }
+        $global:SedgMenuTexts = @{
+            MenuTitle = 'Serverless Edge DNS Gateway + Zapret DPI Bypass'
+            MiInstall = 'Install'; MiUpdate = 'Update'; MiStatus = 'Status'; MiRestart = 'Restart'
+            MiPause = 'Pause'; MiResume = 'Resume'; MiUpstream = 'Upstream DNS'; MiSysDns = 'System DNS'
+            MiCdn = 'CDN test'; MiUninstall = 'Uninstall'; MiLang = 'Language'; MiExit = 'Exit'
+            StServices = 'Services'; StNetwork = 'Network'; MnUpstream = 'Upstream'
+            MnLocalDns = 'Local DNS active (127.0.0.1)'; MnOtherDns = 'System DNS / DHCP'
+            StVerPath = 'Version: {0}    Path: {1}'
+        }
+        function global:T([string]$Key) { return $global:SedgMenuTexts[$Key] }
+        function global:Get-Service { param($Name, $ErrorAction)
+            return [pscustomobject]@{ Name = $Name; Status = 'Running' }
+        }
+        function global:Get-ConfiguredUpstream { return 'https://sdns.example/dns-query' }
+        function global:Get-DnsClientServerAddress { param($ErrorAction)
+            return [pscustomobject]@{ ServerAddresses = @('127.0.0.1') }
+        }
+        $script:InstallerVersion = '1.0.9'
+        $script:InstallPath = Join-Path $TestDrive 'menu-install'
+        $script:DnsProxyService = 'dnsproxy-service'
+        $script:WinwsService = 'winws-service'
+    }
+    AfterAll {
+        foreach ($n in @('Get-Service', 'Get-ConfiguredUpstream', 'Get-DnsClientServerAddress')) {
+            Remove-Item -LiteralPath ("Function:\{0}" -f $n) -Force -ErrorAction SilentlyContinue
+        }
+        # Restore the key-returning T stub shared with Installer.Logic.Tests.ps1.
+        function global:T([string]$Key) { return $Key }
+    }
+
+    It 'renders a well-formed box: every border line is exactly 70 columns' {
+        $global:SedgMenuLines = @()
+        Show-MainMenu
+        $borderLines = @($global:SedgMenuLines | Where-Object { $_.Text -match '^[\u2550\u2551\u2554\u2557\u255A\u255D\u2560\u2563]' })
+        $borderLines.Count | Should -BeGreaterThan 10
+        foreach ($line in $borderLines) {
+            $line.Text.Length | Should -Be 70
+        }
+    }
+
+    It 'renders the full action grid, status panel, and version footer' {
+        $global:SedgMenuLines = @()
+        Show-MainMenu
+        $text = (($global:SedgMenuLines | ForEach-Object { $_.Text }) -join "`n")
+        $text | Should -Match '\[ 1\] Install'
+        $text | Should -Match '\[10\] Uninstall'
+        $text | Should -Match '\[11\] Language'
+        $text | Should -Match '\[ 0\] Exit'
+        $text | Should -Match '\[OK\] dnsproxy   \[OK\] winws'
+        $text | Should -Match 'Local DNS active \(127\.0\.0\.1\)'
+        $text | Should -Match 'sdns\.example'
+        $text | Should -Match 'THANKS TO BIBICADOTNET'
+        $text | Should -Match 'Version: 1\.0\.9'
+    }
+
+    It 'colors the status rows by state' {
+        $global:SedgMenuLines = @()
+        Show-MainMenu
+        $svcRow = @($global:SedgMenuLines | Where-Object { $_.Text -match '\[OK\] dnsproxy' })[0]
+        $svcRow.Fg | Should -Be 'Green'
+        $dnsRow = @($global:SedgMenuLines | Where-Object { $_.Text -match 'Local DNS active' })[0]
+        $dnsRow.Fg | Should -Be 'Green'
+    }
+}

@@ -68,7 +68,7 @@ try {
 # SEDG_INSTALL_PATH / SEDG_MANIFEST_URL only override them when explicitly
 # set (optional, for tests and packaging - nothing requires them).
 
-$script:InstallerVersion = '1.0.9'
+$script:InstallerVersion = '1.1.0'
 if (-not [string]::IsNullOrWhiteSpace($env:SEDG_INSTALL_PATH)) {
     $script:InstallPath = $env:SEDG_INSTALL_PATH
 } else {
@@ -199,6 +199,7 @@ $script:Texts = @{
     StLocalV4='Local DNS IPv4';
     StGw='DNS Gateway';
     MnCurrent='Current'; MnSvc='Services'; MnStopped='Stopped'; MnUpstream='Upstream';
+    MnLocalDns='Local DNS active (127.0.0.1)'; MnOtherDns='System DNS / DHCP';
     StConfig='Config file';
     SumHint='Manage later with Gateway-Manager.bat in the install folder.';
     LbService='Service';
@@ -298,6 +299,7 @@ $script:Texts = @{
     StLocalV4='DNS n\u1ED9i b\u1ED9 IPv4';
     StGw='C\u1ED5ng DNS';
     MnCurrent='Hi\u1EC7n t\u1EA1i'; MnSvc='D\u1ECBch v\u1EE5'; MnStopped='\u0110\u00E3 d\u1EEBng'; MnUpstream='Upstream';
+    MnLocalDns='DNS n\u1ED9i b\u1ED9 \u0111ang ho\u1EA1t \u0111\u1ED9ng (127.0.0.1)'; MnOtherDns='DNS h\u1EC7 th\u1ED1ng / DHCP';
     StConfig='T\u1EC7p c\u1EA5u h\u00ECnh';
     SumHint='Qu\u1EA3n l\u00FD sau n\u00E0y b\u1EB1ng Gateway-Manager.bat trong th\u01B0 m\u1EE5c c\u00E0i \u0111\u1EB7t.';
     LbService='D\u1ECBch v\u1EE5';
@@ -471,11 +473,15 @@ function Write-BoxBottom([int]$Width = 70) {
     Write-Host ([string][char]0x255A + (([string][char]0x2550) * ($Width - 2)) + ([string][char]0x255D)) -ForegroundColor Cyan
 }
 
-function Write-BoxLine([string]$Text, [int]$Width = 70) {
+function Write-BoxLine([string]$Text, [int]$Width = 70, [string]$Color = 'Cyan') {
     $inner = $Width - 2
     $t = [string]$Text
     if ($t.Length -gt $inner) { $t = $t.Substring(0, $inner - 3) + '...' }
-    Write-Host ([string][char]0x2551 + $t.PadRight($inner) + ([string][char]0x2551)) -ForegroundColor Cyan
+    Write-Host ([string][char]0x2551 + $t.PadRight($inner) + ([string][char]0x2551)) -ForegroundColor $Color
+}
+
+function Write-BoxSeparator([int]$Width = 70) {
+    Write-Host ([string][char]0x2560 + (([string][char]0x2550) * ($Width - 2)) + ([string][char]0x2563)) -ForegroundColor Cyan
 }
 
 function Write-Title([string]$Text) {
@@ -3421,41 +3427,64 @@ function Show-InstallSummary {
         Write-Host ('  ' + (T 'CdnSkip')) -ForegroundColor DarkGray
     }
 }
-function Get-MenuStatusLine {
-    # Best-effort two-line overview for the menu box. Never throws.
+function Get-MenuStatusPanel {
+    # Best-effort status rows for the menu box: services, DNS mode, upstream.
+    # Never throws; a failed probe simply drops its row.
+    $rows = @()
+    try {
+        $bits = @()
+        $allOk = $true
+        foreach ($pair in @(@('dnsproxy', $script:DnsProxyService), @('winws', $script:WinwsService))) {
+            $svc = Get-Service -Name $pair[1] -ErrorAction SilentlyContinue
+            $ok = [bool]($svc -and $svc.Status -eq 'Running')
+            if (-not $ok) { $allOk = $false }
+            $bits += ('[{0}] {1}' -f $(if ($ok) { 'OK' } else { '!!' }), $pair[0])
+        }
+        $rows += @{ Label = (T 'StServices'); Value = ($bits -join '   '); Color = $(if ($allOk) { 'Green' } else { 'Red' }) }
+    } catch { }
+    try {
+        $local = $false
+        try {
+            $local = @(Get-DnsClientServerAddress -ErrorAction Stop |
+                Where-Object { @($_.ServerAddresses) -contains '127.0.0.1' }).Count -gt 0
+        } catch { }
+        $rows += @{ Label = (T 'StNetwork'); Value = (T $(if ($local) { 'MnLocalDns' } else { 'MnOtherDns' })); Color = $(if ($local) { 'Green' } else { 'Yellow' }) }
+    } catch { }
     try {
         $u = Get-ConfiguredUpstream
         try { $uh = ([uri]$u).Host } catch { $uh = $u }
-        if ([string]::IsNullOrWhiteSpace($uh)) { $uh = $u }
-        $w = Get-Service -Name $script:WinwsService -ErrorAction SilentlyContinue
-        $d = Get-Service -Name $script:DnsProxyService -ErrorAction SilentlyContinue
-        $svc = if (($w -and $w.Status -eq 'Running') -and ($d -and $d.Status -eq 'Running')) { T 'SvcRunning' } else { T 'MnStopped' }
-        return @(((T 'MnCurrent') + ': ' + (T 'MnUpstream') + '=' + $uh), ((T 'MnSvc') + '=' + $svc))
-    } catch { return @() }
+        if (-not [string]::IsNullOrWhiteSpace($uh)) {
+            $rows += @{ Label = (T 'MnUpstream'); Value = $uh; Color = 'Cyan' }
+        }
+    } catch { }
+    return $rows
 }
 function Show-MainMenu {
     Write-CreditBanner
-    Write-Title (T 'MenuTitle')
     $w = 70
-    $colW = 33
     Write-BoxTop $w
+    Write-BoxLine ('  ' + (T 'MenuTitle')) $w
+    Write-BoxSeparator $w
+    $colW = @(20, 20, 26)
     $row = {
-        param([string]$N1, [string]$K1, [string]$N2, [string]$K2)
-        $c1 = ('  [{0}] {1}' -f $N1, (T $K1))
-        if ($c1.Length -gt $colW) { $c1 = $c1.Substring(0, $colW - 3) + '...' }
-        $c2 = ('[{0}] {1}' -f $N2, (T $K2))
-        if ($c2.Length -gt $colW) { $c2 = $c2.Substring(0, $colW - 3) + '...' }
-        Write-BoxLine ($c1.PadRight($colW) + $c2.PadRight($colW)) $w
+        param([string]$N1, [string]$K1, [string]$N2, [string]$K2, [string]$N3, [string]$K3)
+        $cells = ''
+        $i = 0
+        foreach ($cell in @(@($N1, $K1), @($N2, $K2), @($N3, $K3))) {
+            $text = (' [{0,2}] {1}' -f $cell[0], (T $cell[1]))
+            if ($text.Length -gt $colW[$i] - 1) { $text = $text.Substring(0, $colW[$i] - 4) + '...' }
+            $cells += $text.PadRight($colW[$i])
+            $i++
+        }
+        Write-BoxLine $cells $w
     }
-    & $row '1' 'MiInstall' '7' 'MiUpstream'
-    & $row '2' 'MiUpdate' '8' 'MiSysDns'
-    & $row '3' 'MiStatus' '9' 'MiCdn'
-    & $row '4' 'MiRestart' '10' 'MiUninstall'
-    & $row '5' 'MiPause' '11' 'MiLang'
-    Write-BoxLine ('  [6] ' + (T 'MiResume')) $w
-    Write-BoxLine ('  [0] ' + (T 'MiExit')) $w
-    foreach ($cur in @(Get-MenuStatusLine)) {
-        if (-not [string]::IsNullOrWhiteSpace($cur)) { Write-BoxLine ('  ' + $cur) $w }
+    & $row '1' 'MiInstall'  '5' 'MiPause'    '9'  'MiCdn'
+    & $row '2' 'MiUpdate'   '6' 'MiResume'   '10' 'MiUninstall'
+    & $row '3' 'MiStatus'   '7' 'MiUpstream' '11' 'MiLang'
+    & $row '4' 'MiRestart'  '8' 'MiSysDns'   '0'  'MiExit'
+    Write-BoxSeparator $w
+    foreach ($statusRow in @(Get-MenuStatusPanel)) {
+        Write-BoxLine ('  ' + ([string]$statusRow.Label).PadRight(12) + $statusRow.Value) $w $statusRow.Color
     }
     Write-BoxBottom $w
     Write-Host ''

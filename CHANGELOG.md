@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-06
+
+- Manager menu redesign: three-column action grid with aligned
+  two-digit entries, a live status panel inside the box (per-service
+  [OK]/[!!] indicators, DNS mode, upstream host) colored by state, and
+  the version/path footer. The credit banner is unchanged.
+
 ## [1.0.9] - 2026-10-06
 
 - Fixed the manager self-update console trap: after updating, the
