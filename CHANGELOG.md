@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-10-06
+
+- Code cleanup after the menu redesign: removed the orphaned language
+  keys (MnCurrent, MnSvc, MnStopped, WarnIpv6Reset) and the unused
+  self-update leftovers; the manager self-update message now names the
+  cancelled action so users know to re-run it after reopening.
+
 ## [1.1.2] - 2026-10-06
 
 - The [0] Exit row now sits in the same bracket column as the action

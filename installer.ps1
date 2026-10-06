@@ -68,7 +68,7 @@ try {
 # SEDG_INSTALL_PATH / SEDG_MANIFEST_URL only override them when explicitly
 # set (optional, for tests and packaging - nothing requires them).
 
-$script:InstallerVersion = '1.1.2'
+$script:InstallerVersion = '1.1.3'
 if (-not [string]::IsNullOrWhiteSpace($env:SEDG_INSTALL_PATH)) {
     $script:InstallPath = $env:SEDG_INSTALL_PATH
 } else {
@@ -166,7 +166,6 @@ $script:Texts = @{
     WarnWinDivertScheduled='WinDivert is still marked for deletion; driver removal was scheduled for the next reboot.';
     WarnDriverLocked='WinDivert64.sys is still locked; deletion was scheduled for the next reboot.';
     WarnDnsResetFailed='DNS DHCP reset failed for {0}';
-    WarnIpv6Reset='WARNING: Could not reset IPv6 DNS to DHCP on {0}';
     DoneVerified='{0} verified.';
     LblDnsArchive='DNSProxy archive';
     LblZapArchive='Zapret archive';
@@ -198,7 +197,7 @@ $script:Texts = @{
     StVerPath='Version: {0}    Path: {1}';
     StLocalV4='Local DNS IPv4';
     StGw='DNS Gateway';
-    MnCurrent='Current'; MnSvc='Services'; MnStopped='Stopped'; MnUpstream='Upstream';
+    MnUpstream='Upstream';
     MnLocalDns='Local DNS active (127.0.0.1)'; MnOtherDns='System DNS / DHCP';
     StConfig='Config file';
     SumHint='Manage later with Gateway-Manager.bat in the install folder.';
@@ -266,7 +265,6 @@ $script:Texts = @{
     WarnWinDivertScheduled='WinDivert v\u1EABn \u0111ang ch\u1EDD x\u00F3a; \u0111\u00E3 h\u1EB9n g\u1EE1 driver \u1EDF l\u1EA7n kh\u1EDFi \u0111\u1ED9ng l\u1EA1i t\u1EDBi.';
     WarnDriverLocked='WinDivert64.sys v\u1EABn b\u1ECB kh\u00F3a; \u0111\u00E3 h\u1EB9n x\u00F3a \u1EDF l\u1EA7n kh\u1EDFi \u0111\u1ED9ng l\u1EA1i t\u1EDBi.';
     WarnDnsResetFailed='\u0110\u1EB7t l\u1EA1i DNS v\u1EC1 DHCP th\u1EA5t b\u1EA1i cho {0}';
-    WarnIpv6Reset='C\u1EA2NH B\u00C1O: Kh\u00F4ng \u0111\u1EB7t l\u1EA1i \u0111\u01B0\u1EE3c DNS IPv6 v\u1EC1 DHCP tr\u00EAn {0}';
     DoneVerified='\u0110\u00E3 x\u00E1c minh {0}.';
     LblDnsArchive='g\u00F3i DNSProxy';
     LblZapArchive='g\u00F3i Zapret';
@@ -298,7 +296,7 @@ $script:Texts = @{
     StVerPath='Phi\u00EAn b\u1EA3n: {0}    \u0110\u01B0\u1EDDng d\u1EABn: {1}';
     StLocalV4='DNS n\u1ED9i b\u1ED9 IPv4';
     StGw='C\u1ED5ng DNS';
-    MnCurrent='Hi\u1EC7n t\u1EA1i'; MnSvc='D\u1ECBch v\u1EE5'; MnStopped='\u0110\u00E3 d\u1EEBng'; MnUpstream='Upstream';
+    MnUpstream='Upstream';
     MnLocalDns='DNS n\u1ED9i b\u1ED9 \u0111ang ho\u1EA1t \u0111\u1ED9ng (127.0.0.1)'; MnOtherDns='DNS h\u1EC7 th\u1ED1ng / DHCP';
     StConfig='T\u1EC7p c\u1EA5u h\u00ECnh';
     SumHint='Qu\u1EA3n l\u00FD sau n\u00E0y b\u1EB1ng Gateway-Manager.bat trong th\u01B0 m\u1EE5c c\u00E0i \u0111\u1EB7t.';
@@ -2767,7 +2765,7 @@ function Update-ManagerFromDist([string]$ForAction) {
         $script:InstallerMutex = $null; $script:MutexDepth = 0; $script:OpTranscript = $null
         $script:InstallerVersion = $distVersion
         Write-Host ''
-        Write-Host (('  Manager updated to version {0}. Start Gateway-Manager.bat again to use the new menu.' -f $distVersion)) -ForegroundColor Yellow
+        Write-Host (('  Manager updated to version {0}. Start Gateway-Manager.bat again, then run {1} again to continue.' -f $distVersion, $ForAction)) -ForegroundColor Yellow
         if (Test-OwnsProcessInvocation) {
             Wait-HandoffClosePrompt
             Exit-Installer 0
