@@ -632,3 +632,54 @@ Describe 'Watchdog script (generated, executed against stubs)' {
         $global:SedgWatchdogCalls | Should -BeNullOrEmpty
     }
 }
+
+Describe 'DNS CIM-to-netsh fallback (mocked)' {
+    # Some adapters (CI runner images, freshly reset interfaces) have no
+    # MSFT_DNSClientServerAddress objects, so the CIM setter and getter fail.
+    # The installer must fall back to netsh instead of aborting.
+    BeforeAll {
+        $global:SedgDnsFbCalls = @()
+        function global:Get-DnsClientServerAddress { param($InterfaceIndex, $ErrorAction)
+            throw "No MSFT_DNSClientServerAddress objects found with property 'InterfaceIndex' equal to '$InterfaceIndex'."
+        }
+        function global:Set-DnsClientServerAddress { param($InterfaceIndex, $ServerAddresses, $ErrorAction)
+            throw "No MSFT_DNSClientServerAddress objects found with property 'InterfaceIndex' equal to '$InterfaceIndex'."
+        }
+        function global:Get-NetAdapter { param($Name, $ErrorAction)
+            return [pscustomobject]@{ Name = [string]$Name; ifIndex = 7 }
+        }
+        function global:netsh.exe { $global:SedgDnsFbCalls += ('netsh:' + ($args -join ' ')); $global:LASTEXITCODE = 0 }
+
+        Import-InstallerFunction 'Set-AdapterDnsFamily'
+        Import-InstallerFunction 'Set-AdapterDnsStatic'
+        Import-InstallerFunction 'Set-AdapterDnsBoth'
+        Import-InstallerFunction 'Get-AdapterDnsSnapshot'
+        Import-InstallerFunction 'Restore-AdapterDnsSnapshot'
+    }
+    AfterAll {
+        foreach ($n in @('Get-DnsClientServerAddress', 'Set-DnsClientServerAddress', 'Get-NetAdapter', 'netsh.exe')) {
+            Remove-Item -LiteralPath ("Function:\{0}" -f $n) -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Set-AdapterDnsBoth falls back to per-family netsh static sets when CIM objects are absent' {
+        $global:SedgDnsFbCalls = @()
+        Set-AdapterDnsBoth 'Ethernet' @('127.0.0.1') @('::1')
+        ($global:SedgDnsFbCalls | Where-Object { $_ -like 'netsh:interface ipv4 set dnsservers name=Ethernet static 127.0.0.1 primary*' }).Count | Should -Be 1
+        ($global:SedgDnsFbCalls | Where-Object { $_ -like 'netsh:interface ipv6 set dnsservers name=Ethernet static ::1 primary*' }).Count | Should -Be 1
+    }
+
+    It 'Get-AdapterDnsSnapshot returns an empty snapshot when the adapter has no DNS client entries' {
+        $s = Get-AdapterDnsSnapshot 7
+        $s | Should -Not -BeNullOrEmpty
+        @($s.V4).Count | Should -Be 0
+        @($s.V6).Count | Should -Be 0
+    }
+
+    It 'Restore-AdapterDnsSnapshot restores DHCP for an empty snapshot' {
+        $global:SedgDnsFbCalls = @()
+        Restore-AdapterDnsSnapshot 'Ethernet' @{ V4 = @(); V6 = @() }
+        ($global:SedgDnsFbCalls | Where-Object { $_ -like 'netsh:interface ipv4 set dnsservers name=Ethernet source=dhcp*' }).Count | Should -Be 1
+        ($global:SedgDnsFbCalls | Where-Object { $_ -like 'netsh:interface ipv6 set dnsservers name=Ethernet source=dhcp*' }).Count | Should -Be 1
+    }
+}

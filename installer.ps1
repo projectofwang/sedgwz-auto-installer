@@ -1120,7 +1120,16 @@ function Set-AdapterDnsFamily([string]$AdapterName, [ValidateSet('IPv4','IPv6')]
     try {
         Set-DnsClientServerAddress -InterfaceIndex $interfaceIndex -ServerAddresses $addresses -ErrorAction Stop
     } catch {
-        throw "Failed to set $AddressFamily DNS on $AdapterName (interface index $interfaceIndex): $($_.Exception.Message)"
+        # Some adapters (freshly reset, driver-level oddities, runner images)
+        # have no MSFT_DNSClientServerAddress objects at all, so the CIM
+        # setter fails. netsh reaches the same state without them.
+        $cimError = $_.Exception.Message
+        $list = ($addresses -join ' ')
+        $netshOut = (& netsh.exe interface $family set dnsservers "name=$AdapterName" static $list primary validate=no 2>&1 | Out-String)
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to set $AddressFamily DNS on $AdapterName (interface index $interfaceIndex): $cimError ; netsh fallback failed (exit $LASTEXITCODE): $($netshOut.Trim())"
+        }
+        Write-Warning ("Set-DnsClientServerAddress failed on '{0}'; applied {1} static DNS via netsh instead. ({2})" -f $AdapterName, $AddressFamily, $cimError)
     }
 }
 
@@ -1136,7 +1145,23 @@ function Set-AdapterDnsStatic([string]$AdapterName, [string[]]$V4, [string[]]$V6
     try {
         Set-DnsClientServerAddress -InterfaceIndex $interfaceIndex -ServerAddresses $combined -ErrorAction Stop
     } catch {
-        throw "Failed to set combined DNS on $AdapterName (interface index $interfaceIndex): $($_.Exception.Message)"
+        # CIM objects can be absent on some adapters (see Set-AdapterDnsFamily);
+        # fall back to per-family netsh static sets.
+        $cimError = $_.Exception.Message
+        $v4Ok = $true
+        $v6Ok = $true
+        if (@($V4).Count -gt 0) {
+            $out4 = (& netsh.exe interface ipv4 set dnsservers "name=$AdapterName" static (@($V4) -join ' ') primary validate=no 2>&1 | Out-String)
+            $v4Ok = ($LASTEXITCODE -eq 0)
+        }
+        if (@($V6).Count -gt 0) {
+            $out6 = (& netsh.exe interface ipv6 set dnsservers "name=$AdapterName" static (@($V6) -join ' ') primary validate=no 2>&1 | Out-String)
+            $v6Ok = ($LASTEXITCODE -eq 0)
+        }
+        if (-not ($v4Ok -and $v6Ok)) {
+            throw "Failed to set combined DNS on $AdapterName (interface index $interfaceIndex): $cimError ; netsh fallback failed (ipv4 ok: $v4Ok, ipv6 ok: $v6Ok)"
+        }
+        Write-Warning ("Set-DnsClientServerAddress failed on '{0}'; applied static DNS via netsh instead. ({1})" -f $AdapterName, $cimError)
     }
 }
 
@@ -1419,7 +1444,14 @@ function Get-AdapterDnsSnapshot([int]$IfIndex) {
     # Rollback input for the adapter mutation loops: per-family current DNS.
     $v4 = @()
     $v6 = @()
-    $rows = @(Get-DnsClientServerAddress -InterfaceIndex $IfIndex -ErrorAction Stop)
+    try {
+        $rows = @(Get-DnsClientServerAddress -InterfaceIndex $IfIndex -ErrorAction Stop)
+    } catch {
+        # An adapter with no DNS client entries (DHCP/reset state, runner
+        # images) has no MSFT_DNSClientServerAddress objects at all: that is
+        # an empty snapshot (restore to DHCP), not an unknown state.
+        return @{ V4 = $v4; V6 = $v6 }
+    }
     foreach ($a in @($rows | Select-Object -ExpandProperty ServerAddresses)) {
         try {
             $parsed = [System.Net.IPAddress]::Parse([string]$a)

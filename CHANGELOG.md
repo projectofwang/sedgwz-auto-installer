@@ -20,6 +20,9 @@
   covers the NSSM pins; concurrency groups and job timeouts on all
   workflows; Dependabot covers `cloudflare/`; `npm run deploy:cf:dry`
   builds first instead of failing on a fresh clone.
+- Fixed DNS adapters whose CIM DNS client objects are absent (freshly
+  reset interfaces, some runner images): static DNS now falls back to
+  netsh instead of aborting the install or update.
 - New `integration` workflow: elevated end-to-end smoke on a disposable
   Windows runner (Install, Status, Restart, Uninstall) against local stub
   components, exercising real NSSM services, the watchdog task, and DNS
