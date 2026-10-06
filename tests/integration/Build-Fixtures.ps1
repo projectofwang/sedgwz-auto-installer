@@ -1,10 +1,9 @@
 # Builds the local fixture assets served by the integration smoke test.
 # Produces in -OutDir (a plain HTTP server root):
-#   manifest.json                  approved-only manifest pointing at the fixtures
+#   approved-releases.json         approved-only manifest pointing at the fixtures
 #   version.json                   distribution metadata served next to installer.ps1
 #   installer.ps1                  copy of the repo installer
-#   dnsproxy-windows-amd64-<tag>.zip   stub dnsproxy.exe (binds 127.0.0.1:53, answers A)
-#   zapret-v72.13.zip              stub winws.exe (sleeps) + required driver files
+#   <GitHub-like layout>/...       component fixture zips under REPO/releases/download/TAG/
 #   nssm-2.24.zip                  the REAL NSSM archive, re-served locally so CI
 #                                  never depends on nssm.cc availability
 # All hashes are computed at build time, so SHA-256 pinning stays enforced.
@@ -216,7 +215,10 @@ class StubWinws {
             }
         }
     }
-    ($manifest | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath (Join-Path $OutDir 'manifest.json') -Encoding ASCII
+    # Named approved-releases.json (not manifest.json) so the installer's
+    # distribution-base derivation (manifest URL minus the file name) resolves
+    # to the fixture server root and the manager self-update probe works.
+    ($manifest | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath (Join-Path $OutDir 'approved-releases.json') -Encoding ASCII
 
     # Distribution metadata served next to installer.ps1 (the manager
     # self-update path reads it; versions match so self-update stays idle).
