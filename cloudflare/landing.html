@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="vi">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -184,6 +184,35 @@
   .foot a { color: var(--sky); text-decoration: none; }
   .foot a:hover { text-decoration: underline; }
 
+  /* side verses (variant C): fixed in gutters, take no flow space */
+  .w { display: inline-block; }
+  .side {
+    position: fixed; top: 50%; transform: translateY(-50%); z-index: 1;
+    width: clamp(200px, 16vw, 300px);
+    pointer-events: none;
+  }
+  .side--l { left: clamp(10px, 1.4vw, 30px); }
+  .side--r { right: clamp(10px, 1.4vw, 30px); }
+  @media (max-width: 1199px) { .side { display: none; } }
+  .verse {
+    margin: 0 0 .3em;
+    font-family: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, "Times New Roman", serif;
+    font-weight: 400; font-size: 25px; line-height: 1.3;
+    letter-spacing: .05em; word-spacing: .3em;
+    color: rgba(196,181,253,.85); text-transform: uppercase;
+  }
+  .verse + .verse { margin-top: 1em; }
+  .verse .w { animation: fadeUp .9s cubic-bezier(.16,.84,.24,1) backwards; animation-delay: calc(var(--i) * 55ms + var(--n, 0ms)); }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(.3em); } }
+  .side .credit {
+    display: flex; align-items: center; gap: 10px; margin-top: 22px;
+    font-family: var(--mono); font-size: 10px; letter-spacing: .2em; text-transform: uppercase;
+    color: rgba(196,181,253,.55);
+  }
+  .side .credit::before {
+    content: ""; flex: 1; border-top: 1px dashed rgba(196,181,253,.32);
+  }
+
   /* entrance */
   @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
   .wrap > * { animation: rise .5s cubic-bezier(.2,.7,.3,1) both; }
@@ -202,14 +231,29 @@
     .foot { flex-direction: column; align-items: flex-start; }
   }
   @media (prefers-reduced-motion: reduce) {
-    .wrap > * { animation: none; }
+    .wrap > *, .w { animation: none; }
     .badge::before { animation: none; }
+    .w { opacity: 1 !important; transform: none !important; }
     * { transition: none !important; }
   }
 </style>
 </head>
 <body>
   <canvas id="sky" aria-hidden="true"></canvas>
+  <aside class="side side--l" aria-hidden="true">
+    <p class="verse" data-spread>ĐẠO KHẢ ĐẠO</p>
+    <p class="verse" data-spread>PHI THƯỜNG ĐẠO</p>
+    <p class="verse" data-spread>DANH KHẢ DANH</p>
+    <p class="verse" data-spread>PHI THƯỜNG DANH</p>
+    <span class="credit">trích từ Lão Tử</span>
+  </aside>
+  <aside class="side side--r" aria-hidden="true">
+    <p class="verse" data-spread>NHÂN PHÁP ĐỊA</p>
+    <p class="verse" data-spread>ĐỊA PHÁP THIÊN</p>
+    <p class="verse" data-spread>THIÊN PHÁP ĐẠO</p>
+    <p class="verse" data-spread>ĐẠO PHÁP TỰ NHIÊN</p>
+    <span class="credit">trích từ Đạo Đức Kinh</span>
+  </aside>
   <noscript>
     <div style="max-width:880px;margin:12px auto 0;padding:10px 14px;border:1px solid #2c3650;border-radius:8px;font:13px/1.5 system-ui,sans-serif;color:#98a2b8;">
       JavaScript is off: the version badge is unavailable and copy buttons are inert, but every command on this page works as plain text. /
@@ -225,8 +269,8 @@
           <span>GitHub</span>
         </a>
         <div class="lang">
-          <button id="lang-en" type="button" aria-pressed="true">EN</button>
-          <button id="lang-vi" type="button" aria-pressed="false">VI</button>
+          <button id="lang-vi" type="button" aria-pressed="true">VI</button>
+          <button id="lang-en" type="button" aria-pressed="false">EN</button>
         </div>
       </div>
     </div>
@@ -290,14 +334,39 @@
   </div>
 
 <script>
+/* Split side verses into WORD spans (spaces stay real text nodes). */
+(function () {
+  var i = 0;
+  function walk(node) {
+    Array.prototype.forEach.call(node.childNodes, function (child) {
+      if (child.nodeType === 3) {
+        if (!child.textContent.trim()) return;
+        var tokens = child.textContent.match(/\s+|\S+/g) || [];
+        var frag = document.createDocumentFragment();
+        tokens.forEach(function (tk) {
+          if (/^\s+$/.test(tk)) { frag.appendChild(document.createTextNode(tk)); return; }
+          var s = document.createElement('span');
+          s.className = 'w'; s.textContent = tk;
+          s.style.setProperty('--i', i++);
+          frag.appendChild(s);
+        });
+        node.replaceChild(frag, child);
+      } else if (child.nodeType === 1) { walk(child); }
+    });
+  }
+  var els = document.querySelectorAll('[data-spread]');
+  for (var k = 0; k < els.length; k++) { walk(els[k]); }
+})();
+</script>
+<script>
 (function () {
   var STR = {
     en: { loading: 'version: loading…', unavailable: 'version: unavailable', copied: 'Copied' },
     vi: { loading: 'phiên bản: đang tải…', unavailable: 'phiên bản: không khả dụng', copied: 'Đã chép' }
   };
-  var lang = 'en';
-  try { lang = localStorage.getItem('sedg-lang') || 'en'; } catch (e) {}
-  if (lang !== 'vi') { lang = 'en'; }
+  var lang = 'vi';
+  try { lang = localStorage.getItem('sedg-lang') || 'vi'; } catch (e) {}
+  if (lang !== 'en') { lang = 'vi'; }
   var meta = null;
 
   function t(key) { return STR[lang][key]; }
@@ -324,7 +393,7 @@
   }
 
   function setLang(l) {
-    lang = l === 'vi' ? 'vi' : 'en';
+    lang = l === 'en' ? 'en' : 'vi';
     try { localStorage.setItem('sedg-lang', lang); } catch (e) {}
     applyLang();
   }
