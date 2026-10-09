@@ -12,8 +12,8 @@ routes = [
   { pattern = "dl.taiyuanwangjie.dpdns.org/*", zone_name = "taiyuanwangjie.dpdns.org" }
 ]
 
-# Uncomment to disable the default *.workers.dev route and serve only the custom domain.
-# workers_dev = false
+# Disabled: serve only the custom domain, no default *.workers.dev route.
+workers_dev = false
 
 [assets]
 directory = "./public"

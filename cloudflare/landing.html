@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>Serverless Edge DNS Gateway + Zapret — Install</title>
-<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="%2305070d"/><path d="M16 5l9 5v7c0 5.2-3.8 9.3-9 10-5.2-.7-9-4.8-9-10v-7z" fill="none" stroke="%23a78bfa" stroke-width="2.5"/><circle cx="16" cy="15" r="3" fill="%236ee7b7"/></svg>'>
+<link rel="icon" href="/favicon.svg">
 <style>
   :root {
     color-scheme: dark;
@@ -327,9 +327,9 @@
         <button id="copy2" class="copy" type="button" data-en="Copy" data-vi="Sao chép">Copy</button>
       </div>
       <div class="step-card">
-        <div class="row"><span class="step">2</span><span class="hint" data-en="Check the SHA-256 hash" data-vi="Kiểm tra mã SHA-256">Check the SHA-256 hash</span></div>
+        <div class="row"><span class="step">2</span><span class="hint" data-en="Cross-check hash via GitHub" data-vi="Đối chiếu mã qua GitHub">Cross-check hash via GitHub</span></div>
         <div class="cmd">
-          <code id="cmd3">$v = Invoke-RestMethod https://dl.taiyuanwangjie.dpdns.org/version.json; if ((Get-FileHash installer.ps1 -Algorithm SHA256).Hash.ToLower() -ne $v.sha256) { throw 'SHA-256 mismatch' } 'hash OK: ' + $v.version</code>
+          <code id="cmd3">$h = ((Invoke-RestMethod https://github.com/projectofwang/sedgwz-auto-installer/releases/latest/download/SHA256SUMS -UseBasicParsing) -split "`n" | Where-Object { $_ -match 'installer\.ps1' }) -split '\s+' | Select-Object -First 1; if ((Get-FileHash installer.ps1 -Algorithm SHA256).Hash.ToLower() -ne $h) { throw 'SHA-256 mismatch' } 'hash OK'</code>
         </div>
         <button id="copy3" class="copy" type="button" data-en="Copy" data-vi="Sao chép">Copy</button>
       </div>
