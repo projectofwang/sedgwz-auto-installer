@@ -221,6 +221,19 @@
   .wrap > *:nth-child(4) { animation-delay: .24s; }
   .wrap > *:nth-child(5) { animation-delay: .3s; }
 
+  /* Desktop-only vertical tightening: trims whitespace so the page fits closer to one screen.
+     Type scale, chips and the 104px mascots are untouched; mobile keeps its airy rhythm below. */
+  @media (min-width: 721px) {
+    body { padding-bottom: 44px; }
+    .nav { padding: 10px 2px; }
+    .hero { padding: 26px 2px 4px; }
+    .install { margin-top: 18px; }
+    .sec-label { margin: 28px 2px 14px; }
+    .hash { margin-top: 12px; }
+    #sha { margin-top: 10px; }
+    .foot { margin-top: 26px; padding-top: 12px; }
+  }
+
   @media (max-width: 720px) {
     .steps { grid-template-columns: 1fr; }
   }
