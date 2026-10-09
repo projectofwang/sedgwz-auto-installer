@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.1.9] - 2026-10-09
+
+- Log lỗi thật (loại exception + message) khi target CDN rớt để
+  chẩn đoán thay vì chỉ báo đỏ câm.
+
 ## [1.1.8] - 2026-10-09
 
 - Xóa DNS client cache đầu test CDN chống cache âm làm rớt oan
