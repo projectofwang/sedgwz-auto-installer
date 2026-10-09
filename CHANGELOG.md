@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.1.8] - 2026-10-09
+
+- Xóa DNS client cache đầu test CDN chống cache âm làm rớt oan
+  cả hàng sau stall thoáng qua + dọn file temp chẩn đoán.
+
 ## [1.1.7] - 2026-10-09
 
 - Retry resolve DNS đúng 1 lần sau ~1 giây trước khi báo fail
