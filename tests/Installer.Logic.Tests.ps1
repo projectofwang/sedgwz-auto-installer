@@ -45,6 +45,7 @@ Import-InstallerFunction 'Get-ConfiguredUpstream'
 Import-InstallerFunction 'Get-AssetDownloadBase'
 Import-InstallerFunction 'Test-DownloadUrl'
 Import-InstallerFunction 'Download-File'
+Import-InstallerFunction 'Test-CDNOptimization'
 
 Describe 'Test-DnsUpstream' {
     It 'accepts https/tls/h3/quic URLs' {
@@ -373,5 +374,31 @@ Describe 'Boot resilience (no network after reboot)' {
         $toks = $null; $errs = $null
         [void][System.Management.Automation.Language.Parser]::ParseInput($gen, [ref]$toks, [ref]$errs)
         $errs.Count | Should -Be 0
+    }
+}
+
+Describe 'Test-CDNOptimization ping handling' {
+    BeforeAll {
+        function global:Get-IPLocation([string]$IP, [hashtable]$Headers) {
+            return @{ City = 'Hanoi'; Org = 'FakeNet' }
+        }
+        Mock Invoke-RestMethod { return [pscustomobject]@{ city = 'Hanoi'; country = 'Vietnam'; asn_organization = 'FakeNet' } }
+        Mock Start-Sleep { }
+        Mock Write-Host { }
+    }
+    AfterAll {
+        Remove-Item function:global:Get-IPLocation -ErrorAction SilentlyContinue
+    }
+    It 'reports ping-blocked as degraded (Yellow), not failed (Red)' {
+        Mock Test-Connection { throw [System.Net.NetworkInformation.PingException]::new('An exception occurred during a Ping request.') }
+        Test-CDNOptimization
+        Should -Invoke Write-Host -ParameterFilter { $ForegroundColor -eq 'Yellow' -and $Object -match 'CdnPingBlocked' }
+        Should -Invoke Write-Host -Times 0 -ParameterFilter { $ForegroundColor -eq 'Red' }
+    }
+    It 'still reports fast pings green with latency' {
+        Mock Test-Connection { return [pscustomobject]@{ ResponseTime = 5 } }
+        Test-CDNOptimization
+        Should -Invoke Write-Host -ParameterFilter { $ForegroundColor -eq 'Green' -and $Object -match '\(5ms\)' }
+        Should -Invoke Write-Host -Times 0 -ParameterFilter { $ForegroundColor -eq 'Red' }
     }
 }

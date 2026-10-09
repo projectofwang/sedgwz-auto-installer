@@ -189,6 +189,7 @@ $script:Texts = @{
     CdnLoc='Your Location: {0}';
     CdnIsp='Your ISP:      {0}';
     CdnErr='{0} Error / Timeout';
+    CdnPingBlocked='{0} (DNS OK, ping blocked: {1}{2})';
     InfoDnsTarget='DNS target: 127.0.0.1:53';
     InfoTmpV4='Temporary DNS IPv4: 1.1.1.1, 8.8.8.8';
     InfoTmpV6='Temporary DNS IPv6: 2606:4700:4700::1111, 2001:4860:4860::8888';
@@ -288,6 +289,7 @@ $script:Texts = @{
     CdnLoc='V\u1ECB tr\u00ED c\u1EE7a b\u1EA1n: {0}';
     CdnIsp='Nh\u00E0 m\u1EA1ng c\u1EE7a b\u1EA1n: {0}';
     CdnErr='{0} L\u1ED7i / Timeout';
+    CdnPingBlocked='{0} (DNS OK, ping b\u1ECB ch\u1EB7n: {1}{2})';
     InfoDnsTarget='DNS \u0111\u00EDch: 127.0.0.1:53';
     InfoTmpV4='DNS t\u1EA1m IPv4: 1.1.1.1, 8.8.8.8';
     InfoTmpV6='DNS t\u1EA1m IPv6: 2606:4700:4700::1111, 2001:4860:4860::8888';
@@ -3361,11 +3363,6 @@ function Test-CDNOptimization {
                 throw "No IPv4 address returned."
             }
 
-            $ping = Test-Connection -ComputerName $target.Domain -Count 1 -ErrorAction Stop
-            # Low: PS7 renamed ResponseTime to Latency.
-            $ms = $ping.ResponseTime
-            if ($null -eq $ms) { try { $ms = $ping.Latency } catch { Write-Warning ('SEDG:Test-CDNOptimization: $ms = $ping.Latency (' + $_.Exception.Message + ')'); Write-Verbose $_ } }
-
             $cdnLoc = $null
             if ($ipCache.ContainsKey($resolvedIP)) { $cdnLoc = $ipCache[$resolvedIP] }
             else {
@@ -3380,15 +3377,25 @@ function Test-CDNOptimization {
                 }
             }
 
-            $color = if ($ms -lt 10) {
-                'Green'
-            } elseif ($ms -lt 20) {
-                'Yellow'
-            } else {
-                'Red'
-            }
+            try {
+                $ping = Test-Connection -ComputerName $target.Domain -Count 1 -ErrorAction Stop
+                # Low: PS7 renamed ResponseTime to Latency.
+                $ms = $ping.ResponseTime
+                if ($null -eq $ms) { try { $ms = $ping.Latency } catch { Write-Warning ('SEDG:Test-CDNOptimization: $ms = $ping.Latency (' + $_.Exception.Message + ')'); Write-Verbose $_ } }
 
-            Write-Host ("  {0} ({1}ms){2}" -f $name, $ms, $locationInfo) -ForegroundColor $color
+                $color = if ($ms -lt 10) {
+                    'Green'
+                } elseif ($ms -lt 20) {
+                    'Yellow'
+                } else {
+                    'Red'
+                }
+
+                Write-Host ("  {0} ({1}ms){2}" -f $name, $ms, $locationInfo) -ForegroundColor $color
+            } catch {
+                Write-Verbose ('SEDG:Test-CDNOptimization: ping blocked for ' + $target.Domain + ' (' + $_.Exception.Message + ')')
+                Write-Host (('  ' + ((T 'CdnPingBlocked') -f $name, $resolvedIP, $locationInfo))) -ForegroundColor Yellow
+            }
         } catch {
             Write-Host (('  ' + ((T 'CdnErr') -f $name))) -ForegroundColor Red
         }
