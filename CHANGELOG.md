@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.1.6] - 2026-10-09
+
+- Retry ping đúng 1 lần sau ~1 giây trước khi báo blocked trong
+  test CDN: ICMP chập chờn thoáng qua giờ vẫn cho kết quả ms
+  bình thường thay vì vàng degraded oan.
+
 ## [1.1.5] - 2026-10-09
 
 - Tách lỗi ping-blocked khỏi fail trong test CDN: resolve OK nhưng
