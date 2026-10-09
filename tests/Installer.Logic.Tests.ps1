@@ -386,6 +386,7 @@ Describe 'Test-CDNOptimization ping handling' {
         Mock Invoke-RestMethod { return [pscustomobject]@{ city = 'Hanoi'; country = 'Vietnam'; asn_organization = 'FakeNet' } }
         Mock Start-Sleep { }
         Mock Write-Host { }
+        Mock Write-Verbose { }
         Mock Clear-DnsClientCache { }
     }
     AfterAll {
@@ -431,6 +432,12 @@ Describe 'Test-CDNOptimization ping handling' {
         Should -Invoke Write-Host -ParameterFilter { $ForegroundColor -eq 'Green' -and $Object -match '\(5ms\)' }
         Should -Invoke Write-Host -Times 0 -Exactly -ParameterFilter { $ForegroundColor -eq 'Yellow' }
         Should -Invoke Write-Host -Times 0 -Exactly -ParameterFilter { $ForegroundColor -eq 'Red' }
+    }
+    It 'logs the real exception to verbose when a target fails' {
+        Mock Resolve-CdnIPv4 { throw [System.Net.Sockets.SocketException]::new(11001) }
+        Test-CDNOptimization
+        Should -Invoke Write-Verbose -ParameterFilter { $Message -match 'target failed' -and $Message -match 'SocketException' }
+        Should -Invoke Write-Host -ParameterFilter { $ForegroundColor -eq 'Red' -and $Object -match 'CdnErr' }
     }
     It 'reports resolve failure on both attempts as error (Red)' {
         Mock Resolve-CdnIPv4 { throw [System.Net.Sockets.SocketException]::new(11001) }

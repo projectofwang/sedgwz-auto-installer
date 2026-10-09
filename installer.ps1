@@ -3418,6 +3418,7 @@ function Test-CDNOptimization {
 
             Write-Host ("  {0} ({1}ms){2}" -f $name, $ms, $locationInfo) -ForegroundColor $color
         } catch {
+            Write-Verbose ('SEDG:Test-CDNOptimization: target failed: ' + $target.Domain + ' (' + $_.Exception.GetType().Name + ': ' + $_.Exception.Message + ')')
             Write-Host (('  ' + ((T 'CdnErr') -f $name))) -ForegroundColor Red
         }
     }
