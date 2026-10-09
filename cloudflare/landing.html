@@ -236,6 +236,24 @@
     .w { opacity: 1 !important; transform: none !important; }
     * { transition: none !important; }
   }
+
+  /* page-mascot pack (fox-ink, cat, hedgehog, otter, sloth) — in the flow, right of the upstream chips */
+  .upstream { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 14px 18px; }
+  .pack { display: flex; flex: 0 0 auto; align-items: center; justify-content: flex-end; gap: 6px; }
+  /* chips stay pinned at the top (16px under the label); each mascot's 73px of extra height is
+     cancelled by negative margins top+bottom, so the row stays 31px tall and the sprites
+     overflow equally above and below — optically centred on the chip band. */
+  .mascot { flex: 0 0 auto; z-index: 5; margin: -40px 0 -33px 0;
+    width: 104px; height: 104px; background: none; border: 0; padding: 0; cursor: pointer;
+    filter: drop-shadow(0 14px 26px rgba(0,0,0,.5)); transition: transform .18s cubic-bezier(.2,.7,.3,1); }
+  .mascot:hover { transform: translateY(-2px); }
+  .squash { display: block; position: relative; width: 100%; height: 100%; }
+  .squash span { position: absolute; inset: 0; background-size: 300% 300%; background-repeat: no-repeat; }
+  .lyr-dir { opacity: 1; }
+  .lyr-react { opacity: 0; }
+  @media (max-width: 830px) { .mascot { width: 68px; height: 68px; margin: -20px 0 -17px 0; } }
+  @media (max-width: 620px) { .mascot--opt { display: none; } }
+  @media (max-width: 420px) { .pack { display: none; } }
 </style>
 </head>
 <body>
@@ -323,10 +341,29 @@
     <div class="hash" id="sha"></div>
 
     <div class="sec-label"><span class="no">03</span><span class="t" data-en="Upstream components" data-vi="Thành phần upstream">Upstream components</span></div>
-    <div class="files">
-      <a href="https://github.com/AdguardTeam/dnsproxy" target="_blank" rel="noopener">dnsproxy</a>
-      <a href="https://github.com/bol-van/zapret" target="_blank" rel="noopener">zapret</a>
-      <a href="https://nssm.cc/" target="_blank" rel="noopener">nssm</a>
+    <div class="upstream">
+      <div class="files">
+        <a href="https://github.com/AdguardTeam/dnsproxy" target="_blank" rel="noopener">dnsproxy</a>
+        <a href="https://github.com/bol-van/zapret" target="_blank" rel="noopener">zapret</a>
+        <a href="https://nssm.cc/" target="_blank" rel="noopener">nssm</a>
+      </div>
+      <div class="pack">
+        <button class="mascot" type="button" aria-label="Boop the fox">
+          <span class="squash"><span class="lyr-dir" style="background-image:url(/mascots/fox-ink-directions.webp)"></span><span class="lyr-react" style="background-image:url(/mascots/fox-ink-reactions.webp)"></span></span>
+        </button>
+        <button class="mascot" type="button" aria-label="Boop the cat">
+          <span class="squash"><span class="lyr-dir" style="background-image:url(/mascots/cat-directions.webp)"></span><span class="lyr-react" style="background-image:url(/mascots/cat-reactions.webp)"></span></span>
+        </button>
+        <button class="mascot mascot--opt" type="button" aria-label="Boop the hedgehog">
+          <span class="squash"><span class="lyr-dir" style="background-image:url(/mascots/hedgehog-directions.webp)"></span><span class="lyr-react" style="background-image:url(/mascots/hedgehog-reactions.webp)"></span></span>
+        </button>
+        <button class="mascot mascot--opt" type="button" aria-label="Boop the otter">
+          <span class="squash"><span class="lyr-dir" style="background-image:url(/mascots/otter-directions.webp)"></span><span class="lyr-react" style="background-image:url(/mascots/otter-reactions.webp)"></span></span>
+        </button>
+        <button class="mascot mascot--opt" type="button" aria-label="Boop the sloth">
+          <span class="squash"><span class="lyr-dir" style="background-image:url(/mascots/sloth-directions.webp)"></span><span class="lyr-react" style="background-image:url(/mascots/sloth-reactions.webp)"></span></span>
+        </button>
+      </div>
     </div>
     <div class="foot">
       <span><span data-en="Thanks to " data-vi="Cảm ơn ">Thanks to </span><a href="https://github.com/BIBICADOTNET" target="_blank" rel="noopener">BIBICADOTNET</a><span data-en=" for the original script and concept." data-vi=" vì script và ý tưởng gốc."> for the original script and concept.</span></span>
@@ -483,6 +520,89 @@
     }
     if (reduced) { draw(0); return; }
     (function loop(ts) { draw(ts || 0); requestAnimationFrame(loop); })(0);
+  } catch (e) {}
+})();
+</script>
+<script>
+(function () {
+  var SECTOR = 2 * Math.PI / 8, HYS = 0.12;
+  var CLOCKWISE = ['right', 'down-right', 'down', 'down-left', 'left', 'up-left', 'up', 'up-right'];
+  var DIR_IDX = { 'up-left': 0, 'up': 1, 'up-right': 2, left: 3, center: 4, right: 5, 'down-left': 6, down: 7, 'down-right': 8 };
+  var REACTIONS = ['blink', 'heart', 'sparkle', 'surprised', 'wink', 'bashful', 'sleepy', 'dizzy', 'delighted'];
+  var wrap = function (a) { return Math.atan2(Math.sin(a), Math.cos(a)); };
+  var PAYOFF = ['heart', 'sparkle', 'delighted'];
+  var reduced = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function setCell(el, index) {
+    var col = index % 3, row = Math.floor(index / 3);
+    el.style.backgroundPosition = (col * 50) + '% ' + (row * 50) + '%';
+  }
+  /* One independent instance per button: own sector, click history and timers. */
+  function create(btn) {
+    var squashEl = btn.querySelector('.squash'),
+        lyrDir = btn.querySelector('.lyr-dir'),
+        lyrReact = btn.querySelector('.lyr-react');
+    if (!squashEl || !lyrDir || !lyrReact) return null;
+    var sector = 0, pi = 0, clicks = [], clearT = 0, dizzyT = 0;
+    function showReaction(name) {
+      var idx = REACTIONS.indexOf(name);
+      if (idx < 0) { lyrReact.style.opacity = 0; lyrDir.style.opacity = 1; return; }
+      setCell(lyrReact, idx);
+      lyrReact.style.opacity = 1; lyrDir.style.opacity = 0;
+    }
+    function hideReaction() { lyrReact.style.opacity = 0; lyrDir.style.opacity = 1; }
+    function setDir(name) { setCell(lyrDir, DIR_IDX[name]); }
+    function aim(px, py) {
+      var r = btn.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      var dx = px - cx, dy = py - cy;
+      if (Math.hypot(dx, dy) < 70) { setDir('center'); return; }
+      var angle = Math.atan2(dy, dx);
+      if (Math.abs(wrap(angle - sector * SECTOR)) < SECTOR / 2 + HYS) { setDir(CLOCKWISE[sector]); return; }
+      sector = ((Math.round(angle / SECTOR) + 8) % 8);
+      setDir(CLOCKWISE[sector]);
+    }
+    function squash() {
+      if (reduced || !squashEl.animate) return;
+      squashEl.animate(
+        [{ transform: 'scale(1,1)' }, { transform: 'scale(1.15,0.8)' }, { transform: 'scale(0.92,1.08)' }, { transform: 'scale(1,1)' }],
+        { duration: 420, easing: 'ease-out' });
+      squashEl.style.transformOrigin = '50% 78%';
+    }
+    btn.addEventListener('click', function () {
+      var now = Date.now();
+      clicks = clicks.filter(function (t) { return now - t < 1600; });
+      clicks.push(now);
+      squash();
+      clearTimeout(clearT); clearTimeout(dizzyT);
+      if (clicks.length >= 4) {
+        clicks = [];
+        showReaction('dizzy');
+        dizzyT = setTimeout(hideReaction, 1100);
+        return;
+      }
+      showReaction('blink');
+      setTimeout(function () {
+        var k = PAYOFF[pi % PAYOFF.length]; pi++;
+        showReaction(k);
+        clearT = setTimeout(hideReaction, 560);
+      }, 120);
+    });
+    setCell(lyrDir, DIR_IDX.center);
+    setCell(lyrReact, 0);
+    return { btn: btn, aim: aim };
+  }
+  var pack = Array.prototype.map.call(document.querySelectorAll('.mascot'), create).filter(Boolean);
+  try {
+    if (window.matchMedia && matchMedia('(hover:hover) and (pointer:fine)').matches) {
+      window.addEventListener('pointermove', function (e) {
+        for (var i = 0; i < pack.length; i++) pack[i].aim(e.clientX, e.clientY);
+      }, { passive: true });
+      window.addEventListener('scroll', function () {
+        for (var i = 0; i < pack.length; i++) {
+          var r = pack[i].btn.getBoundingClientRect();
+          pack[i].aim(r.left + r.width / 2, r.top + r.height / 2 - 200);
+        }
+      }, { passive: true });
+    }
   } catch (e) {}
 })();
 </script>

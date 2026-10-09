@@ -10,6 +10,11 @@ mkdir -p cloudflare/public
 cp installer.ps1 cloudflare/public/installer.ps1
 cp approved-releases.json cloudflare/public/approved-releases.json
 cp cloudflare/landing.html cloudflare/public/index.html
+mkdir -p cloudflare/public/mascots
+for m in fox-ink cat hedgehog otter sloth; do
+  cp "cloudflare/mascots/$m-directions.webp" "cloudflare/public/mascots/$m-directions.webp"
+  cp "cloudflare/mascots/$m-reactions.webp" "cloudflare/public/mascots/$m-reactions.webp"
+done
 
 # Deterministic line endings: checkouts differ by platform (CRLF on Windows,
 # LF elsewhere) and both installer.ps1 and approved-releases.json are hashed
@@ -25,7 +30,7 @@ cat > cloudflare/public/_headers <<'HEADERS_EOF'
   Referrer-Policy: no-referrer
   X-Frame-Options: DENY
   Strict-Transport-Security: max-age=31536000; includeSubDomains
-  Content-Security-Policy: default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'none'; object-src 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self'; object-src 'none'
 /installer.ps1
   Cache-Control: no-store
   Content-Type: text/plain; charset=utf-8
