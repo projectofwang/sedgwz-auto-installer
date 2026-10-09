@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [1.1.4] - 2026-10-09
+
+- Landing page: boopable mascot row (fox, cat, hedgehog, otter, sloth)
+  with eye-tracking sprites, flanking verse rails, and a tighter
+  desktop vertical rhythm.
+- Landing security: stricter Content-Security-Policy (frame-ancestors,
+  base-uri, form-action locked down), no-store on HTML entry points,
+  local favicon.svg, workers.dev route disabled, and the pre-run
+  hash check now cross-checks GitHub Releases SHA256SUMS.
+
 ## [1.1.3] - 2026-10-06
 
 - Code cleanup after the menu redesign: removed the orphaned language
