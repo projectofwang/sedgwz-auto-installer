@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-09
+
+- Fix test CDN báo đỏ oan dưới StrictMode: đọc ms kiểu strict-safe
+  (ưu tiên Latency của PS7, fallback ResponseTime) + Pester chạy
+  cùng strict với production.
+
 ## [1.1.9] - 2026-10-09
 
 - Log lỗi thật (loại exception + message) khi target CDN rớt để
