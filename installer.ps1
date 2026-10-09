@@ -3318,6 +3318,9 @@ function Resolve-CdnIPv4([string]$Domain) {
 function Test-CDNOptimization {
     Write-Step 'Verifying CDN Vietnam Optimization...'
 
+    # Flush stale negative DNS entries so one transient stall cannot fail the whole loop.
+    try { Clear-DnsClientCache -ErrorAction Stop; Write-Verbose 'SEDG:Test-CDNOptimization: DNS client cache cleared.' } catch { Write-Verbose $_ }
+
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
     $headers = @{

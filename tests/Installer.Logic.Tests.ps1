@@ -386,9 +386,24 @@ Describe 'Test-CDNOptimization ping handling' {
         Mock Invoke-RestMethod { return [pscustomobject]@{ city = 'Hanoi'; country = 'Vietnam'; asn_organization = 'FakeNet' } }
         Mock Start-Sleep { }
         Mock Write-Host { }
+        Mock Clear-DnsClientCache { }
     }
     AfterAll {
         Remove-Item function:global:Get-IPLocation -ErrorAction SilentlyContinue
+    }
+    It 'clears the DNS client cache once on entry (negative entries must not fail the loop)' {
+        Mock Test-Connection { return [pscustomobject]@{ ResponseTime = 5 } }
+        Test-CDNOptimization
+        Should -Invoke Clear-DnsClientCache -Times 1 -Exactly
+        Should -Invoke Write-Host -ParameterFilter { $ForegroundColor -eq 'Green' -and $Object -match '\(5ms\)' }
+    }
+    It 'continues the test when cache clear throws (non-elevated)' {
+        Mock Clear-DnsClientCache { throw 'Access denied.' }
+        Mock Test-Connection { return [pscustomobject]@{ ResponseTime = 5 } }
+        Test-CDNOptimization
+        Should -Invoke Clear-DnsClientCache -Times 1 -Exactly
+        Should -Invoke Write-Host -ParameterFilter { $ForegroundColor -eq 'Green' -and $Object -match '\(5ms\)' }
+        Should -Invoke Write-Host -Times 0 -Exactly -ParameterFilter { $ForegroundColor -eq 'Red' }
     }
     It 'retries ping once: first throw then success stays green' {
         $script:pingCalls = 0
