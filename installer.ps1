@@ -3306,6 +3306,15 @@ function Get-IPLocation([string]$IP, [hashtable]$Headers) {
         return $null
     }
 }
+function Resolve-CdnIPv4([string]$Domain) {
+    $addresses = [System.Net.Dns]::GetHostAddresses($Domain)
+    $ip = @($addresses | Where-Object { $_.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork }) |
+        Select-Object -First 1 -ExpandProperty IPAddressToString
+    if ([string]::IsNullOrWhiteSpace($ip)) {
+        throw "No IPv4 address returned."
+    }
+    return $ip
+}
 function Test-CDNOptimization {
     Write-Step 'Verifying CDN Vietnam Optimization...'
 
@@ -3355,12 +3364,13 @@ function Test-CDNOptimization {
         Start-Sleep -Milliseconds 200
 
         try {
-            $addresses = [System.Net.Dns]::GetHostAddresses($target.Domain)
-            $resolvedIP = @($addresses | Where-Object { $_.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork }) |
-                Select-Object -First 1 -ExpandProperty IPAddressToString
-
-            if ([string]::IsNullOrWhiteSpace($resolvedIP)) {
-                throw "No IPv4 address returned."
+            try {
+                $resolvedIP = Resolve-CdnIPv4 $target.Domain
+            } catch {
+                # DNS can flap in bursts like ICMP: wait ~1s and retry exactly once.
+                Write-Verbose ('SEDG:Test-CDNOptimization: DNS retry for ' + $target.Domain + ' (' + $_.Exception.Message + ')')
+                Start-Sleep -Seconds 1
+                $resolvedIP = Resolve-CdnIPv4 $target.Domain
             }
 
             $cdnLoc = $null

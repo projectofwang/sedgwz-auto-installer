@@ -46,6 +46,7 @@ Import-InstallerFunction 'Get-AssetDownloadBase'
 Import-InstallerFunction 'Test-DownloadUrl'
 Import-InstallerFunction 'Download-File'
 Import-InstallerFunction 'Test-CDNOptimization'
+Import-InstallerFunction 'Resolve-CdnIPv4'
 
 Describe 'Test-DnsUpstream' {
     It 'accepts https/tls/h3/quic URLs' {
@@ -399,20 +400,42 @@ Describe 'Test-CDNOptimization ping handling' {
         Test-CDNOptimization
         Should -Invoke Test-Connection -Times 18 -Exactly
         Should -Invoke Write-Host -ParameterFilter { $ForegroundColor -eq 'Green' -and $Object -match '\(5ms\)' }
-        Should -Invoke Write-Host -Times 0 -ParameterFilter { $ForegroundColor -eq 'Yellow' }
-        Should -Invoke Write-Host -Times 0 -ParameterFilter { $ForegroundColor -eq 'Red' }
+        Should -Invoke Write-Host -Times 0 -Exactly -ParameterFilter { $ForegroundColor -eq 'Yellow' }
+        Should -Invoke Write-Host -Times 0 -Exactly -ParameterFilter { $ForegroundColor -eq 'Red' }
+    }
+    It 'retries DNS once: resolve fails first then succeeds stays green' {
+        $script:resolveCalls = 0
+        Mock Resolve-CdnIPv4 {
+            $script:resolveCalls++
+            if ($script:resolveCalls % 2 -eq 1) { throw [System.Net.Sockets.SocketException]::new(11001) }
+            return '203.0.113.7'
+        }
+        Mock Test-Connection { return [pscustomobject]@{ ResponseTime = 5 } }
+        Test-CDNOptimization
+        Should -Invoke Resolve-CdnIPv4 -Times 18 -Exactly
+        Should -Invoke Write-Host -ParameterFilter { $ForegroundColor -eq 'Green' -and $Object -match '\(5ms\)' }
+        Should -Invoke Write-Host -Times 0 -Exactly -ParameterFilter { $ForegroundColor -eq 'Yellow' }
+        Should -Invoke Write-Host -Times 0 -Exactly -ParameterFilter { $ForegroundColor -eq 'Red' }
+    }
+    It 'reports resolve failure on both attempts as error (Red)' {
+        Mock Resolve-CdnIPv4 { throw [System.Net.Sockets.SocketException]::new(11001) }
+        Mock Test-Connection { return [pscustomobject]@{ ResponseTime = 5 } }
+        Test-CDNOptimization
+        Should -Invoke Resolve-CdnIPv4 -Times 18 -Exactly
+        Should -Invoke Test-Connection -Times 0 -Exactly
+        Should -Invoke Write-Host -ParameterFilter { $ForegroundColor -eq 'Red' -and $Object -match 'CdnErr' }
     }
     It 'reports ping-blocked as degraded (Yellow), not failed (Red)' {
         Mock Test-Connection { throw [System.Net.NetworkInformation.PingException]::new('An exception occurred during a Ping request.') }
         Test-CDNOptimization
         Should -Invoke Test-Connection -Times 18 -Exactly
         Should -Invoke Write-Host -ParameterFilter { $ForegroundColor -eq 'Yellow' -and $Object -match 'CdnPingBlocked' }
-        Should -Invoke Write-Host -Times 0 -ParameterFilter { $ForegroundColor -eq 'Red' }
+        Should -Invoke Write-Host -Times 0 -Exactly -ParameterFilter { $ForegroundColor -eq 'Red' }
     }
     It 'still reports fast pings green with latency' {
         Mock Test-Connection { return [pscustomobject]@{ ResponseTime = 5 } }
         Test-CDNOptimization
         Should -Invoke Write-Host -ParameterFilter { $ForegroundColor -eq 'Green' -and $Object -match '\(5ms\)' }
-        Should -Invoke Write-Host -Times 0 -ParameterFilter { $ForegroundColor -eq 'Red' }
+        Should -Invoke Write-Host -Times 0 -Exactly -ParameterFilter { $ForegroundColor -eq 'Red' }
     }
 }
