@@ -389,9 +389,23 @@ Describe 'Test-CDNOptimization ping handling' {
     AfterAll {
         Remove-Item function:global:Get-IPLocation -ErrorAction SilentlyContinue
     }
+    It 'retries ping once: first throw then success stays green' {
+        $script:pingCalls = 0
+        Mock Test-Connection {
+            $script:pingCalls++
+            if ($script:pingCalls % 2 -eq 1) { throw [System.Net.NetworkInformation.PingException]::new('An exception occurred during a Ping request.') }
+            return [pscustomobject]@{ ResponseTime = 5 }
+        }
+        Test-CDNOptimization
+        Should -Invoke Test-Connection -Times 18 -Exactly
+        Should -Invoke Write-Host -ParameterFilter { $ForegroundColor -eq 'Green' -and $Object -match '\(5ms\)' }
+        Should -Invoke Write-Host -Times 0 -ParameterFilter { $ForegroundColor -eq 'Yellow' }
+        Should -Invoke Write-Host -Times 0 -ParameterFilter { $ForegroundColor -eq 'Red' }
+    }
     It 'reports ping-blocked as degraded (Yellow), not failed (Red)' {
         Mock Test-Connection { throw [System.Net.NetworkInformation.PingException]::new('An exception occurred during a Ping request.') }
         Test-CDNOptimization
+        Should -Invoke Test-Connection -Times 18 -Exactly
         Should -Invoke Write-Host -ParameterFilter { $ForegroundColor -eq 'Yellow' -and $Object -match 'CdnPingBlocked' }
         Should -Invoke Write-Host -Times 0 -ParameterFilter { $ForegroundColor -eq 'Red' }
     }

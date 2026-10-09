@@ -3379,23 +3379,31 @@ function Test-CDNOptimization {
 
             try {
                 $ping = Test-Connection -ComputerName $target.Domain -Count 1 -ErrorAction Stop
-                # Low: PS7 renamed ResponseTime to Latency.
-                $ms = $ping.ResponseTime
-                if ($null -eq $ms) { try { $ms = $ping.Latency } catch { Write-Warning ('SEDG:Test-CDNOptimization: $ms = $ping.Latency (' + $_.Exception.Message + ')'); Write-Verbose $_ } }
-
-                $color = if ($ms -lt 10) {
-                    'Green'
-                } elseif ($ms -lt 20) {
-                    'Yellow'
-                } else {
-                    'Red'
-                }
-
-                Write-Host ("  {0} ({1}ms){2}" -f $name, $ms, $locationInfo) -ForegroundColor $color
             } catch {
-                Write-Verbose ('SEDG:Test-CDNOptimization: ping blocked for ' + $target.Domain + ' (' + $_.Exception.Message + ')')
-                Write-Host (('  ' + ((T 'CdnPingBlocked') -f $name, $resolvedIP, $locationInfo))) -ForegroundColor Yellow
+                # ICMP via WinDivert is flaky: wait ~1s and retry exactly once.
+                Write-Verbose ('SEDG:Test-CDNOptimization: ping retry for ' + $target.Domain + ' (' + $_.Exception.Message + ')')
+                Start-Sleep -Seconds 1
+                try {
+                    $ping = Test-Connection -ComputerName $target.Domain -Count 1 -ErrorAction Stop
+                } catch {
+                    Write-Verbose ('SEDG:Test-CDNOptimization: ping blocked for ' + $target.Domain + ' (' + $_.Exception.Message + ')')
+                    Write-Host (('  ' + ((T 'CdnPingBlocked') -f $name, $resolvedIP, $locationInfo))) -ForegroundColor Yellow
+                    continue
+                }
             }
+            # Low: PS7 renamed ResponseTime to Latency.
+            $ms = $ping.ResponseTime
+            if ($null -eq $ms) { try { $ms = $ping.Latency } catch { Write-Warning ('SEDG:Test-CDNOptimization: $ms = $ping.Latency (' + $_.Exception.Message + ')'); Write-Verbose $_ } }
+
+            $color = if ($ms -lt 10) {
+                'Green'
+            } elseif ($ms -lt 20) {
+                'Yellow'
+            } else {
+                'Red'
+            }
+
+            Write-Host ("  {0} ({1}ms){2}" -f $name, $ms, $locationInfo) -ForegroundColor $color
         } catch {
             Write-Host (('  ' + ((T 'CdnErr') -f $name))) -ForegroundColor Red
         }
