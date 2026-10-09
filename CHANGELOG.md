@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.1.7] - 2026-10-09
+
+- Retry resolve DNS đúng 1 lần sau ~1 giây trước khi báo fail
+  trong test CDN: DNS chết thoáng qua theo đợt giờ vẫn chạy tiếp
+  flow ping bình thường thay vì đỏ cả hàng oan.
+
 ## [1.1.6] - 2026-10-09
 
 - Retry ping đúng 1 lần sau ~1 giây trước khi báo blocked trong
