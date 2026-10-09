@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [1.1.5] - 2026-10-09
+
+- Tách lỗi ping-blocked khỏi fail trong test CDN: resolve OK nhưng
+  ping bị chặn (ICMP chập chờn) giờ báo degraded màu vàng kèm IP,
+  chỉ resolve rớt mới báo lỗi đỏ.
+
 ## [1.1.4] - 2026-10-09
 
 - Landing page: boopable mascot row (fox, cat, hedgehog, otter, sloth)
