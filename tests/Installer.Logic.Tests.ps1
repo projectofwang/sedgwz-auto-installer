@@ -45,7 +45,15 @@ Import-InstallerFunction 'Get-ConfiguredUpstream'
 Import-InstallerFunction 'Get-AssetDownloadBase'
 Import-InstallerFunction 'Test-DownloadUrl'
 Import-InstallerFunction 'Download-File'
-Import-InstallerFunction 'Test-CDNOptimization'
+# Test-CDNOptimization runs under StrictMode Latest in production
+# (installer.ps1:18); inject the same into the extracted copy so the
+# suite catches strict-only failures like the PS7 ResponseTime rename.
+& {
+    $tokens = $null; $errs = $null
+    $strictAst = [System.Management.Automation.Language.Parser]::ParseFile($global:SEDGInstallerPath, [ref]$tokens, [ref]$errs)
+    $strictFn = $strictAst.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Test-CDNOptimization' }, $true)
+    Invoke-Expression (($strictFn.Extent.Text) -replace '^function ([\w-]+) \{', 'function global:$1 { Set-StrictMode -Version Latest;')
+}
 Import-InstallerFunction 'Resolve-CdnIPv4'
 
 Describe 'Test-DnsUpstream' {
@@ -391,6 +399,21 @@ Describe 'Test-CDNOptimization ping handling' {
     }
     AfterAll {
         Remove-Item function:global:Get-IPLocation -ErrorAction SilentlyContinue
+    }
+    It 'extracted copy runs under StrictMode Latest (production parity)' {
+        (Get-Command Test-CDNOptimization).Definition | Should -Match 'Set-StrictMode -Version Latest'
+    }
+    It 'reads PS7 Latency property (ResponseTime gone)' {
+        Mock Test-Connection { return [pscustomobject]@{ Latency = 7 } }
+        Test-CDNOptimization
+        Should -Invoke Write-Host -ParameterFilter { $ForegroundColor -eq 'Green' -and $Object -match '\(7ms\)' }
+        Should -Invoke Write-Host -Times 0 -Exactly -ParameterFilter { $ForegroundColor -eq 'Red' }
+    }
+    It 'degrades Yellow when ping has no latency property at all' {
+        Mock Test-Connection { return [pscustomobject]@{ } }
+        Test-CDNOptimization
+        Should -Invoke Write-Host -ParameterFilter { $ForegroundColor -eq 'Yellow' -and $Object -match 'CdnPingBlocked' }
+        Should -Invoke Write-Host -Times 0 -Exactly -ParameterFilter { $ForegroundColor -eq 'Red' }
     }
     It 'clears the DNS client cache once on entry (negative entries must not fail the loop)' {
         Mock Test-Connection { return [pscustomobject]@{ ResponseTime = 5 } }

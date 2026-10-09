@@ -3404,9 +3404,16 @@ function Test-CDNOptimization {
                     continue
                 }
             }
-            # Low: PS7 renamed ResponseTime to Latency.
-            $ms = $ping.ResponseTime
-            if ($null -eq $ms) { try { $ms = $ping.Latency } catch { Write-Warning ('SEDG:Test-CDNOptimization: $ms = $ping.Latency (' + $_.Exception.Message + ')'); Write-Verbose $_ } }
+            # Strict-safe latency read (PS7 dropped ResponseTime for Latency;
+            # touching a missing property throws under StrictMode Latest).
+            $ms = $null
+            if ($ping.PSObject.Properties['Latency']) { $ms = $ping.Latency }
+            elseif ($ping.PSObject.Properties['ResponseTime']) { $ms = $ping.ResponseTime }
+            if ($null -eq $ms) {
+                Write-Verbose ('SEDG:Test-CDNOptimization: no latency property for ' + $target.Domain)
+                Write-Host (('  ' + ((T 'CdnPingBlocked') -f $name, $resolvedIP, $locationInfo))) -ForegroundColor Yellow
+                continue
+            }
 
             $color = if ($ms -lt 10) {
                 'Green'
