@@ -29,7 +29,7 @@ function Assert-True([bool]$Condition, [string]$Message) {
 
 function Invoke-Installer([string]$Action, [string[]]$Extra = @()) {
     Write-Host "=== installer -Action $Action $($Extra -join ' ') ==="
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installerPath -Action $Action -Language en @Extra
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installerPath -Action $Action -Language en -AllowSeam @Extra
     if ($LASTEXITCODE -ne 0) { throw "installer -Action $Action exited with code $LASTEXITCODE" }
 }
 
