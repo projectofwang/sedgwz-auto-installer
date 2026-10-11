@@ -70,7 +70,7 @@ try {
 # set (optional, for tests and packaging - nothing requires them). The seams
 # are ignored when elevated unless -AllowSeam is passed.
 
-$script:InstallerVersion = '1.2.0'
+$script:InstallerVersion = '1.2.1'
 if ((-not [string]::IsNullOrWhiteSpace($env:SEDG_INSTALL_PATH)) -and ($AllowSeam -or (-not (Test-Administrator)))) {
     Write-Warning 'SEDG_INSTALL_PATH test seam is active; install layout leaves the default.'
     $script:InstallPath = $env:SEDG_INSTALL_PATH
