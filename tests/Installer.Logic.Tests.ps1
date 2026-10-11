@@ -47,6 +47,9 @@ Import-InstallerFunction 'Test-Administrator'
 Import-InstallerFunction 'Test-DownloadUrl'
 Import-InstallerFunction 'Download-File'
 Import-InstallerFunction 'Set-UpstreamInConfig'
+Import-InstallerFunction 'Get-UpstreamList'
+Import-InstallerFunction 'Write-OriginalConfigTemplate'
+Import-InstallerFunction 'Ensure-Config'
 # Test-CDNOptimization runs under StrictMode Latest in production
 # (installer.ps1:18); inject the same into the extracted copy so the
 # suite catches strict-only failures like the PS7 ResponseTime rename.
@@ -106,13 +109,13 @@ upstream:
 "@ | Set-Content -LiteralPath $script:ConfigFile
         (Get-ConfiguredUpstream) | Should -Be 'tls://dns.example'
     }
-    It 'keeps Taiyuan SDNS (Default) first (R3 regression pin)' {
+    It 'keeps SDEG (Default) first (R3 regression pin)' {
         $tokens = $null; $errs = $null
         $ast = [System.Management.Automation.Language.Parser]::ParseFile($global:SEDGInstallerPath, [ref]$tokens, [ref]$errs)
         $assign = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$script:OptionalUpstreams' }, $true)
         $assign | Should -Not -BeNullOrEmpty
         Invoke-Expression $assign.Extent.Text
-        @($script:OptionalUpstreams.Keys)[0] | Should -Be 'Taiyuan SDNS (Default)'
+        @($script:OptionalUpstreams.Keys)[0] | Should -Be 'SDEG (Default)'
     }
     It 'ignores full-line and trailing comments when reading upstream' {
         $script:ConfigFile = Join-Path $TestDrive 'upstream-comments.yaml'
@@ -160,6 +163,204 @@ upstream:
         $src | Should -Match '\(\$upUri\.Host \+ \$upUri\.AbsolutePath\)'
         $src | Should -Not -Match "\(T 'UpChanged'\) \+ `$SelectedUpstream"
         $src | Should -Not -Match "' \+ \(T 'MnUpstream'\) \+ ': ' \+ `$sumUp\)"
+    }
+}
+
+function global:Import-Presets {
+    # Single source of truth: reuse the ordered preset table from installer.ps1.
+    # Global: Its cannot see script-local helpers in this file.
+    $tokens = $null; $errs = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($global:SEDGInstallerPath, [ref]$tokens, [ref]$errs)
+    $assign = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$script:OptionalUpstreams' }, $true)
+    Invoke-Expression $assign.Extent.Text
+}
+
+function global:Import-SedgFunction([string]$Name) {
+    # Run-phase re-import (the flow-style test removes global:Ensure-Config).
+    $tokens = $null; $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($global:SEDGInstallerPath, [ref]$tokens, [ref]$errors)
+    if ($errors.Count -gt 0) { throw "installer.ps1 has $($errors.Count) parse errors" }
+    $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $Name }, $true)
+    if (-not $fn) { throw "installer function not found: $Name" }
+    Invoke-Expression (($fn.Extent.Text) -replace '^function ', 'function global:')
+}
+
+Describe 'Write-OriginalConfigTemplate (multi-upstream)' {
+    It 'emits 6 upstreams in design order plus timeout 5s' {
+        $script:DnsProxyPath = Join-Path $TestDrive 'dnsproxy'
+        $script:ConfigFile = Join-Path $script:DnsProxyPath 'config.yaml'
+        $script:StateFile = Join-Path $TestDrive 'tpl-state.json'
+        Write-OriginalConfigTemplate
+        $raw = Get-Content -LiteralPath $script:ConfigFile -Raw
+        $expected = @(
+            'https://ultralow2.dns2.nextdns.io/735d22',
+            'https://sdns.taiyuanwangjie.dpdns.org/dns-query',
+            'https://ultralow2.dns2.nextdns.io/9fcbfc',
+            'https://dns.google/dns-query',
+            'https://cloudflare-dns.com/dns-query',
+            'https://dns.quad9.net/dns-query'
+        )
+        $pos = -1
+        foreach ($u in $expected) {
+            $i = $raw.IndexOf($u)
+            $i | Should -BeGreaterThan $pos
+            $pos = $i
+        }
+        $raw | Should -Match '(?m)^timeout: 5s\s*$'
+        $raw | Should -Match '(?m)^fallback:\s*$'
+        $raw | Should -Match '(?m)^bootstrap:\s*$'
+        $raw | Should -Match 'cache-max-ttl: 3600'
+        (Test-ConfigValid) | Should -Be $true
+        (Get-ConfiguredUpstream) | Should -Be $expected[0]
+        @(Get-UpstreamList) | Should -HaveCount 6
+    }
+    It 'reset-to-defaults restores the template after a custom prepend' {
+        $script:DnsProxyPath = Join-Path $TestDrive 'dnsproxy-reset'
+        $script:ConfigFile = Join-Path $script:DnsProxyPath 'config.yaml'
+        $script:StateFile = Join-Path $TestDrive 'reset-state.json'
+        Import-Presets
+        Write-OriginalConfigTemplate
+        function global:Ensure-Config { }
+        try {
+            Set-UpstreamInConfig 'https://custom.example/dns-query'
+            (Get-ConfiguredUpstream) | Should -Be 'https://custom.example/dns-query'
+            Write-OriginalConfigTemplate
+            @(Get-UpstreamList) | Should -HaveCount 6
+            (Get-ConfiguredUpstream) | Should -Be 'https://ultralow2.dns2.nextdns.io/735d22'
+            (Get-Content -LiteralPath $script:ConfigFile -Raw) | Should -Not -Match 'custom\.example'
+        } finally {
+            Import-SedgFunction 'Ensure-Config'
+        }
+    }
+}
+
+Describe 'Get-UpstreamList' {
+    It 'returns valid entries in order, skipping comments and junk' {
+        $script:ConfigFile = Join-Path $TestDrive 'multi.yaml'
+        $script:StateFile = Join-Path $TestDrive 'multi-state.json'
+        @"
+upstream:
+  # standby rotation note
+  - https://a.example/dns-query # primary
+  - tls://b.example
+  - not-a-url
+  - https://c.example/dns-query
+timeout: 5s
+fallback:
+  - https://cloudflare-dns.com/dns-query
+"@ | Set-Content -LiteralPath $script:ConfigFile
+        $list = @(Get-UpstreamList)
+        $list | Should -HaveCount 3
+        $list[0] | Should -Be 'https://a.example/dns-query'
+        $list[1] | Should -Be 'tls://b.example'
+        $list[2] | Should -Be 'https://c.example/dns-query'
+        (Get-ConfiguredUpstream) | Should -Be 'https://a.example/dns-query'
+    }
+    It 'parses flow-style upstream blocks' {
+        $script:ConfigFile = Join-Path $TestDrive 'flow-list.yaml'
+        $script:StateFile = Join-Path $TestDrive 'flow-list-state.json'
+        "listen-ports:`n  - 53`nupstream: [https://a.example/x, https://b.example/y]`n" | Set-Content -LiteralPath $script:ConfigFile -Encoding UTF8 -NoNewline
+        $list = @(Get-UpstreamList)
+        $list | Should -HaveCount 2
+        $list[0] | Should -Be 'https://a.example/x'
+    }
+}
+
+Describe 'Set-UpstreamInConfig multi-upstream' {
+    It 'promotes an existing entry to primary keeping the rest as standby' {
+        Import-Presets
+        $script:ConfigFile = Join-Path $TestDrive 'promote.yaml'
+        $script:StateFile = Join-Path $TestDrive 'promote-state.json'
+        @"
+listen-ports:
+  - 53
+upstream:
+  - https://sdns.taiyuanwangjie.dpdns.org/dns-query
+  - https://dns.google/dns-query
+  - https://cloudflare-dns.com/dns-query
+timeout: 5s
+fallback:
+  - https://cloudflare-dns.com/dns-query
+bootstrap: [1.1.1.1]
+"@ | Set-Content -LiteralPath $script:ConfigFile
+        function global:Ensure-Config { }
+        try {
+            Set-UpstreamInConfig 'https://cloudflare-dns.com/dns-query'
+        } finally {
+            Import-SedgFunction 'Ensure-Config'
+        }
+        $list = @(Get-UpstreamList)
+        $list | Should -HaveCount 3
+        $list[0] | Should -Be 'https://cloudflare-dns.com/dns-query'
+        $list[1] | Should -Be 'https://sdns.taiyuanwangjie.dpdns.org/dns-query'
+        $list[2] | Should -Be 'https://dns.google/dns-query'
+        $out = Get-Content -LiteralPath $script:ConfigFile -Raw
+        $out | Should -Match '(?m)^timeout: 5s\s*$'
+        $out | Should -Match '(?m)^fallback:\s*$'
+        $out | Should -Match 'bootstrap: \[1\.1\.1\.1\]'
+        (Get-ConfiguredUpstream) | Should -Be 'https://cloudflare-dns.com/dns-query'
+    }
+    It 'prepends custom entries and evicts the oldest custom beyond cap 8' {
+        Import-Presets
+        Mock Write-Warning { }
+        $script:DnsProxyPath = Join-Path $TestDrive 'dnsproxy-cap8'
+        $script:ConfigFile = Join-Path $script:DnsProxyPath 'config.yaml'
+        $script:StateFile = Join-Path $TestDrive 'cap8-state.json'
+        # Start from the real 6-entry template, then stage 2 customs (cap 8).
+        Write-OriginalConfigTemplate
+        $staged = @()
+        foreach ($ln in @(Get-Content -LiteralPath $script:ConfigFile)) {
+            if ($ln -match '^timeout:') {
+                # File order mirrors prepend history: mid added after old, so
+                # old sits deeper (= older) and must be evicted first.
+                $staged += '  - https://mid-custom.example/dns-query'
+                $staged += '  - https://old-custom.example/dns-query'
+            }
+            $staged += $ln
+        }
+        $staged | Set-Content -LiteralPath $script:ConfigFile -Encoding UTF8
+        $before = @(Get-UpstreamList)
+        $before | Should -HaveCount 8
+        function global:Ensure-Config { }
+        try {
+            Set-UpstreamInConfig 'https://new-custom.example/dns-query'
+        } finally {
+            Import-SedgFunction 'Ensure-Config'
+        }
+        $list = @(Get-UpstreamList)
+        $list | Should -HaveCount 8
+        $list[0] | Should -Be 'https://new-custom.example/dns-query'
+        $list | Should -Not -Contain 'https://old-custom.example/dns-query'
+        foreach ($kept in @($before | Where-Object { $_ -ne 'https://old-custom.example/dns-query' })) { $list | Should -Contain $kept }
+        Should -Invoke Write-Warning -Times 1 -Exactly
+    }
+}
+
+Describe 'Ensure-Config multi-entry' {
+    It 'preserves a valid multi-entry config without rewrite' {
+        Import-SedgFunction 'Ensure-Config'
+        $script:DnsProxyPath = Join-Path $TestDrive 'dnsproxy-keep'
+        $script:ConfigFile = Join-Path $script:DnsProxyPath 'config.yaml'
+        New-Item -ItemType Directory -Path $script:DnsProxyPath -Force | Out-Null
+        @"
+listen-addrs:
+  - 127.0.0.1
+listen-ports:
+  - 53
+upstream:
+  - https://ultralow2.dns2.nextdns.io/735d22
+  - https://sdns.taiyuanwangjie.dpdns.org/dns-query
+timeout: 5s
+fallback:
+  - https://cloudflare-dns.com/dns-query
+bootstrap:
+  - 1.1.1.1
+cache: true
+"@ | Set-Content -LiteralPath $script:ConfigFile
+        $before = Get-Content -LiteralPath $script:ConfigFile -Raw
+        Ensure-Config
+        (Get-Content -LiteralPath $script:ConfigFile -Raw) | Should -Be $before
+        @(Get-UpstreamList) | Should -HaveCount 2
     }
 }
 

@@ -132,7 +132,7 @@ Files live under the install directory (`C:\serverless-edge-dns-gateway`):
 `config.yaml`, `blacklist.txt`, and `winws-args.txt` are preserved across
 updates and reinstalls.
 
-DNS upstream presets: Taiyuan SDNS (default), Cloudflare, Google, Quad9,
+DNS upstream presets: SDEG (default), Cloudflare, Google, Quad9,
 AdGuard, or a custom encrypted-DNS URL. The active upstream is shown by
 `-Action Status` and stored in `config.yaml`.
 

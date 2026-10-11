@@ -132,7 +132,7 @@ Cac tep nam trong thu muc cai dat (`C:\serverless-edge-dns-gateway`):
 `config.yaml`, `blacklist.txt`, va `winws-args.txt` duoc giu lai qua cac lan
 cap nhat va cai dat lai.
 
-Cac upstream DNS san: Taiyuan SDNS (mac dinh), Cloudflare, Google, Quad9,
+Cac upstream DNS san: SDEG (mac dinh), Cloudflare, Google, Quad9,
 AdGuard, hoac URL DNS ma hoa tuy chinh. Upstream hien tai duoc hien thi boi
 `-Action Status` va luu trong `config.yaml`.
 

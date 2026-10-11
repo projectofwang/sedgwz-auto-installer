@@ -53,6 +53,7 @@ Import-InstallerFunction 'Stop-AllServices'
 Import-InstallerFunction 'Remove-Services'
 Import-InstallerFunction 'Create-Services'
 Import-InstallerFunction 'Write-WatchdogFile'
+Import-InstallerFunction 'Write-State'
 
 # Global recording stubs for every system-touching command the code under test
 # reaches. Installed at run phase only; removed in AfterAll so the shared
@@ -936,5 +937,33 @@ Describe 'Manager menu UI (rendered)' {
         $svcRow.Fg | Should -Be 'Green'
         $dnsRow = @($global:SedgMenuLines | Where-Object { $_.Text -match 'Local DNS active' })[0]
         $dnsRow.Fg | Should -Be 'Green'
+    }
+}
+
+Describe 'Write-State upstream_list' {
+    It 'writes upstream_list additively alongside legacy fields' {
+        $script:InstallerVersion = '9.9.9-test'
+        $script:StateFile = Join-Path $TestDrive 'state-list.json'
+        Write-State 'dns-v1' 'zap-v2' 'https://a.example/dns-query' @('https://a.example/dns-query', 'https://b.example/dns-query')
+        $s = Get-Content -LiteralPath $script:StateFile -Raw | ConvertFrom-Json
+        $s.InstallerVersion | Should -Be '9.9.9-test'
+        $s.DnsProxyRelease | Should -Be 'dns-v1'
+        $s.Upstream | Should -Be 'https://a.example/dns-query'
+        @($s.upstream_list) | Should -HaveCount 2
+        $s.upstream_list[0] | Should -Be 'https://a.example/dns-query'
+        $s.upstream_list[1] | Should -Be 'https://b.example/dns-query'
+    }
+    It 'omits upstream_list when empty (old-reader shape)' {
+        $script:InstallerVersion = '9.9.9-test'
+        $script:StateFile = Join-Path $TestDrive 'state-nolist.json'
+        function global:Get-UpstreamList { return @() }
+        try {
+            Write-State 'dns-v1' 'zap-v2' 'https://a.example/dns-query'
+        } finally {
+            Remove-Item function:global:Get-UpstreamList -ErrorAction SilentlyContinue
+        }
+        $s = Get-Content -LiteralPath $script:StateFile -Raw | ConvertFrom-Json
+        $s.Upstream | Should -Be 'https://a.example/dns-query'
+        ($null -eq $s.upstream_list) | Should -Be $true
     }
 }

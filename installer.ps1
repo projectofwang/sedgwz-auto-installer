@@ -121,7 +121,9 @@ $script:LangFile = Join-Path $script:LangDir 'lang.txt'
 
 # Preset DoH upstreams offered by the menu; the first entry is the default.
 $script:OptionalUpstreams = [ordered]@{
-    'Taiyuan SDNS (Default)' = 'https://sdns.taiyuanwangjie.dpdns.org/dns-query'
+    'SDEG (Default)' = 'https://sdns.taiyuanwangjie.dpdns.org/dns-query'
+    'NextDNS (735d22)' = 'https://ultralow2.dns2.nextdns.io/735d22'
+    'NextDNS (9fcbfc)' = 'https://ultralow2.dns2.nextdns.io/9fcbfc'
     'Cloudflare' = 'https://cloudflare-dns.com/dns-query'
     'Google' = 'https://dns.google/dns-query'
     'Quad9' = 'https://dns.quad9.net/dns-query'
@@ -136,7 +138,7 @@ $script:Texts = @{
     MiRestart='Restart'; MiPause='Pause'; MiResume='Resume'; MiUpstream='DNS Upstream';
     MiSysDns='System DNS'; MiCdn='CDN test'; MiUninstall='Uninstall'; MiLang='Language / Ng\u00F4n ng\u1EEF'; MiExit='Exit'
     PmtSelect='Select'; PmtContinue='Press Enter to continue'; MsgInvalid='Invalid selection.'
-    UpTitle='DNS Upstream'; UpOpt2='Custom DNS - enter your own upstream URL'
+    UpTitle='DNS Upstream'; UpOpt2='Custom DNS - enter your own upstream URL'; UpOptReset='Reset to defaults'
     UpSelect='Select upstream'; UpEnter='Enter custom DNS Upstream URL (https://, tls://, h3:// or quic://)'
     UpInvalid='Invalid upstream selection.'; UpBad='Invalid DNS Upstream. Use an absolute https://, tls://, h3:// or quic:// URL.'
     UpChanging='Changing DNS Upstream...'; UpChanged='DNS Upstream changed: ';
@@ -236,7 +238,7 @@ $script:Texts = @{
     MiRestart='Kh\u1EDFi \u0111\u1ED9ng l\u1EA1i'; MiPause='T\u1EA1m d\u1EEBng'; MiResume='Ti\u1EBFp t\u1EE5c'; MiUpstream='Upstream DNS';
     MiSysDns='DNS h\u1EC7 th\u1ED1ng'; MiCdn='Ki\u1EC3m tra CDN'; MiUninstall='G\u1EE1 c\u00E0i \u0111\u1EB7t'; MiLang='Language / Ng\u00F4n ng\u1EEF'; MiExit='Tho\u00E1t'
     PmtSelect='Ch\u1ECDn'; PmtContinue='Nh\u1EA5n Enter \u0111\u1EC3 ti\u1EBFp t\u1EE5c'; MsgInvalid='L\u1EF1a ch\u1ECDn kh\u00F4ng h\u1EE3p l\u1EC7.'
-    UpTitle='Upstream DNS'; UpOpt2='Custom DNS - t\u1EF1 nh\u1EADp upstream URL'
+    UpTitle='Upstream DNS'; UpOpt2='Custom DNS - t\u1EF1 nh\u1EADp upstream URL'; UpOptReset='Reset v\u1EC1 defaults'
     UpSelect='Ch\u1ECDn upstream'; UpEnter='Nh\u1EADp URL upstream DNS (https://, tls://, h3:// ho\u1EB7c quic://)'
     UpInvalid='L\u1EF1a ch\u1ECDn upstream kh\u00F4ng h\u1EE3p l\u1EC7.'; UpBad='Upstream DNS kh\u00F4ng h\u1EE3p l\u1EC7. D\u00F9ng URL tuy\u1EC7t \u0111\u1ED1i https://, tls://, h3:// ho\u1EB7c quic://.'
     UpChanging='\u0110ang \u0111\u1ED5i upstream DNS...'; UpChanged='\u0110\u00E3 \u0111\u1ED5i upstream DNS: ';
@@ -1887,12 +1889,21 @@ function Install-CommitComponents([hashtable]$Staged) {
     }
 }
 
-function Get-ConfiguredUpstream {
+function Get-UpstreamList {
+    # Ordered valid upstream entries, primary first. Empty when none usable.
+    $list = @()
     if (Test-Path -LiteralPath $script:ConfigFile -PathType Leaf) {
         try {
             $lines = @(Get-Content -LiteralPath $script:ConfigFile -ErrorAction Stop)
             $inUpstream = $false
             foreach ($line in $lines) {
+                if ($line -match '^upstream:\s*\[(.*)\]\s*$') {
+                    foreach ($part in ($Matches[1] -split ',')) {
+                        $u = $part.Trim().Trim('"', "'")
+                        if (Test-DnsUpstream $u) { $list += $u }
+                    }
+                    break
+                }
                 if ($line -match '^upstream:\s*$') { $inUpstream = $true; continue }
                 if ($inUpstream) {
                     if ($line -match '^\s*#') { continue }
@@ -1902,13 +1913,18 @@ function Get-ConfiguredUpstream {
                         if ((($code.Substring(0, $cut.Index) -replace "[^'""]", '').Length % 2) -eq 0) { $code = $code.Substring(0, $cut.Index); break }
                     }
                     if ($code -match '^\s*-\s*["'']?([^''"\s]+)["'']?\s*$') {
-                        $configured = $Matches[1].Trim()
-                        if (Test-DnsUpstream $configured) { return $configured }
+                        $u = $Matches[1].Trim()
+                        if (Test-DnsUpstream $u) { $list += $u }
                     }
                 }
             }
-        } catch { Write-Warning ('SEDG:Get-ConfiguredUpstream: $lines = @(Get-Content -LiteralPath $script:ConfigFile -Erro... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        } catch { Write-Warning ('SEDG:Get-UpstreamList: $lines = @(Get-Content -LiteralPath $script:ConfigFile -ErrorA... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     }
+    return $list
+}
+
+function Get-ConfiguredUpstream {
+    foreach ($u in @(Get-UpstreamList)) { return $u }
     if (Test-Path -LiteralPath $script:StateFile -PathType Leaf) {
         try {
             $state = Get-Content -LiteralPath $script:StateFile -Raw | ConvertFrom-Json
@@ -1916,7 +1932,7 @@ function Get-ConfiguredUpstream {
             if (Test-DnsUpstream $configured) { return $configured }
         } catch { Write-Warning ('SEDG:Get-ConfiguredUpstream: $state = Get-Content -LiteralPath $script:StateFile -Raw | C... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     }
-    return $script:OptionalUpstreams['Taiyuan SDNS (Default)']
+    return $script:OptionalUpstreams['SDEG (Default)']
 }
 
 function Test-DnsUpstream([string]$Upstream) {
@@ -1930,8 +1946,9 @@ function Test-DnsUpstream([string]$Upstream) {
 
 function Write-OriginalConfigTemplate {
     New-Item -ItemType Directory -Path $script:DnsProxyPath -Force | Out-Null
-    # M7: primary upstream plus a neutral fallback so one provider outage
-    # does not take DNS down. Set-UpstreamInConfig preserves fallback.
+    # M7: six upstreams under native load_balance plus a neutral fallback so
+    # one provider outage does not take DNS down. timeout bounds slow-loris
+    # drag at 5s. Set-UpstreamInConfig preserves fallback/bootstrap/cache.
     $tpl = @(
         'listen-addrs:',
         '  - 127.0.0.1',
@@ -1939,7 +1956,13 @@ function Write-OriginalConfigTemplate {
         'listen-ports:',
         '  - 53',
         'upstream:',
+        '  - https://ultralow2.dns2.nextdns.io/735d22',
         '  - https://sdns.taiyuanwangjie.dpdns.org/dns-query',
+        '  - https://ultralow2.dns2.nextdns.io/9fcbfc',
+        '  - https://dns.google/dns-query',
+        '  - https://cloudflare-dns.com/dns-query',
+        '  - https://dns.quad9.net/dns-query',
+        'timeout: 5s',
         'fallback:',
         '  - https://cloudflare-dns.com/dns-query',
         'bootstrap:',
@@ -2012,8 +2035,19 @@ function Set-UpstreamInConfig([string]$Upstream) {
     $pattern = '(?ms)^upstream:\s*\n(?:^[ \t]*-[^\r\n]*\n?)+'
     $flowPattern = '(?m)^upstream:\s*\[.*\]'
     if ((-not [regex]::IsMatch($normalized, $pattern)) -and (-not [regex]::IsMatch($normalized, $flowPattern))) { throw "Could not locate a valid upstream block in $($script:ConfigFile)." }
-    # M7: replace only the upstream block; fallback/bootstrap/cache stay intact.
-    $replacement = ("upstream:`n  - $Upstream`n").Replace('$', '$$')
+    # Multi-upstream: promote-or-prepend the selected entry; the rest stays in
+    # order as standby. Defaults are never evicted; cap 8 drops the oldest
+    # custom first (position = recency, index 0 is newest).
+    $defaults = @($script:OptionalUpstreams.Values)
+    $rest = @(@(Get-UpstreamList) | Where-Object { $_ -ne $Upstream })
+    $list = @($Upstream) + $rest
+    while ($list.Count -gt 8) {
+        $evict = @($list | Where-Object { $defaults -notcontains $_ }) | Select-Object -Last 1
+        if (-not $evict) { break }
+        $list = @($list | Where-Object { $_ -ne $evict })
+        Write-Warning (('Upstream list exceeds 8 entries; removed oldest custom entry: {0}' -f $evict))
+    }
+    $replacement = ("upstream:`n" + (($list | ForEach-Object { "  - $_" }) -join "`n") + "`n").Replace('$', '$$')
     if ([regex]::IsMatch($normalized, $flowPattern)) {
         # Flow-style single line: replace the whole line, still emit block-style.
         $updated = ([regex]$flowPattern).Replace($normalized, $replacement, 1)
@@ -2136,6 +2170,7 @@ function Set-Upstream([string]$SelectedUpstream = $null) {
     Ensure-Administrator
     Test-Platform
     if (-not (Test-Path $script:InstallPath)) { throw (T 'NotFound') }
+    $resetDefaults = $false
 
     if ([string]::IsNullOrWhiteSpace($SelectedUpstream)) {
         Write-Title (T 'UpTitle')
@@ -2147,6 +2182,8 @@ function Set-Upstream([string]$SelectedUpstream = $null) {
         }
         $customIndex = $presetNames.Count + 1
         Write-Host ('  [{0}] {1}' -f $customIndex, (T 'UpOpt2'))
+        $resetIndex = $presetNames.Count + 2
+        Write-Host ('  [{0}] {1}' -f $resetIndex, (T 'UpOptReset'))
         Write-Host ''
         $choice = Read-Host (T 'UpSelect')
         $choiceNum = 0
@@ -2154,19 +2191,22 @@ function Set-Upstream([string]$SelectedUpstream = $null) {
             $SelectedUpstream = $script:OptionalUpstreams[$presetNames[$choiceNum - 1]]
         } elseif ([string]$choice.Trim() -eq [string]$customIndex) {
             $SelectedUpstream = Read-Host (T 'UpEnter')
+        } elseif ([string]$choice.Trim() -eq [string]$resetIndex) {
+            $resetDefaults = $true
         } else {
             throw (T 'UpInvalid')
         }
     }
 
-    if (-not (Test-DnsUpstream $SelectedUpstream)) {
+    if ((-not $resetDefaults) -and (-not (Test-DnsUpstream $SelectedUpstream))) {
         throw (T 'UpBad')
     }
 
     Write-Step (T 'UpChanging')
     Stop-Service -Name $script:DnsProxyService -Force -ErrorAction SilentlyContinue
     try {
-        Set-UpstreamInConfig $SelectedUpstream
+        if ($resetDefaults) { Write-OriginalConfigTemplate; $SelectedUpstream = Get-ConfiguredUpstream }
+        else { Set-UpstreamInConfig $SelectedUpstream }
         $rel = Get-StateReleases
         Write-State $rel[0] $rel[1] $SelectedUpstream
     } catch {
@@ -2724,8 +2764,9 @@ function Test-DnsProxyListeners {
         }
     } catch { Write-Warning ('SEDG:Test-DnsProxyListeners: $udp6 = @($udp | Where-Object { [string]$_.LocalAddress -eq ... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 }
-function Write-State([string]$DnsProxyRelease, [string]$ZapretRelease, [string]$Upstream = $null) {
+function Write-State([string]$DnsProxyRelease, [string]$ZapretRelease, [string]$Upstream = $null, [string[]]$UpstreamList = $null) {
     if ([string]::IsNullOrWhiteSpace($Upstream)) { $Upstream = Get-ConfiguredUpstream }
+    if ($null -eq $UpstreamList) { $UpstreamList = @(Get-UpstreamList) }
     $state = [ordered]@{
         InstallerVersion  = $script:InstallerVersion
         DnsProxyRelease   = if ($DnsProxyRelease) { $DnsProxyRelease } else { 'Unknown' }
@@ -2733,6 +2774,8 @@ function Write-State([string]$DnsProxyRelease, [string]$ZapretRelease, [string]$
         Upstream          = $Upstream
         Updated           = (Get-Date).ToUniversalTime().ToString('o')
     }
+    # Additive: old readers ignore unknown fields; omit when empty.
+    if (@($UpstreamList).Count -gt 0) { $state['upstream_list'] = @($UpstreamList) }
 
     $json = $state | ConvertTo-Json -Depth 3
     $json | Set-Content -LiteralPath $script:StateFile -Encoding UTF8
