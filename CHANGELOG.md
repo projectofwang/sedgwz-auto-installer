@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-11
+
+- Bump InstallerVersion 1.2.0 -> 1.2.1 (`installer.ps1` +
+  `approved-releases.json`, không đổi behavior).
+
 ## [1.2.0] - 2026-10-09
 
 - Fix test CDN báo đỏ oan dưới StrictMode: đọc ms kiểu strict-safe

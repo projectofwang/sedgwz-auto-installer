@@ -276,15 +276,19 @@ Static hosting and deployment details are described in
 .
 |-- .github/
 |   `-- workflows/          CI, release, and component-watch workflows
-|-- cloudflare/             Worker source, build script, deployment docs
+|-- cloudflare/             Static assets-only channel (no Worker script), build script, deployment docs
 |-- tests/                  Pester test suite
 |   |-- Installer.Logic.Tests.ps1
-|   `-- Installer.Maintain.Tests.ps1
+|   |-- Installer.Maintain.Tests.ps1
+|   `-- integration/        Elevated end-to-end smoke (Invoke-Smoke.ps1, Build-Fixtures.ps1)
+|-- docs/                   Function contracts, security audit, upstream design
 |-- tools/
 |   `-- Update-Manifest.ps1 Regenerates approved-releases.json
 |-- approved-releases.json  Pinned component versions and manifest URLs
 |-- installer.ps1           Installer, menu, services, and watchdog logic
 |-- package.json            Build, deploy, and test scripts
+|-- codemap.md              Repository atlas (start here)
+|-- README.vi.md            Vietnamese version of this README
 |-- CHANGELOG.md
 |-- CODEOWNERS
 |-- CONTRIBUTING.md

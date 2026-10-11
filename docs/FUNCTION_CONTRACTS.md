@@ -1,7 +1,6 @@
 # Function contracts — installer.ps1 (~3710 dòng, post R1–R10 + F1–F10)
 
-Gộp từ 5 lanes (số dòng grep-verify 2026-10-11). Quy ước: pre→post/throw | invariant | edge.
-Docs cũ (INSTALLER_MAP/FLOW_TRACES) số dòng lệch ~20-50 do lane fix shift lines — nội dung đúng.
+Gộp từ 5 lanes (số dòng grep-verify 2026-10-11). File này là source of truth cho function contracts (thay thế INSTALLER_MAP/FLOW_TRACES đã xóa). Quy ước: pre→post/throw | invariant | edge.
 
 ## A. Bootstrap/i18n/UI/preflight/manifest (~1–802)
 

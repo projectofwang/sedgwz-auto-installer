@@ -44,6 +44,7 @@ Import-InstallerFunction 'Get-ManifestProperty'
 Import-InstallerFunction 'Get-ManifestString'
 Import-InstallerFunction 'Assert-ManifestComponents'
 Import-InstallerFunction 'Test-ConfigValid'
+Import-InstallerFunction 'Get-UpstreamBlock'
 Import-InstallerFunction 'Get-DefaultWinwsArgs'
 Import-InstallerFunction 'Get-WinwsParameters'
 Import-InstallerFunction 'Backup-DnsSettings'
@@ -261,7 +262,7 @@ Describe 'Get-ApprovedManifest offline' {
         Assert-ManifestComponents $m
         $m.components.dnsproxy.tag | Should -Be 'v0.86.0'
     }
-    It 'warns but still uses a remote manifest older than the last baseline' {
+    It 'hard-fails on a remote manifest older than the last baseline unless -AllowDowngrade' {
         function global:Invoke-WebRequest { param($Uri, $Headers, [switch]$UseBasicParsing, $TimeoutSec, $ErrorAction)
             return [pscustomobject]@{ Content = $global:SedgRemoteManifestJson }
         }
@@ -282,13 +283,60 @@ Describe 'Get-ApprovedManifest offline' {
             $script:StateFile = Join-Path $TestDrive 'r1-state.json'
             '{"InstallerVersion":"1.2.0"}' | Set-Content -LiteralPath $script:StateFile -Encoding UTF8
 
-            $m = Get-ApprovedManifest
+            { Get-ApprovedManifest } | Should -Throw '*AllowDowngrade*'
 
+            $global:SedgRemoteWarnings = @()
+            $script:ManifestCache = $null
+            $m = Get-ApprovedManifest -AllowDowngrade
             $m.installer.version | Should -Be '1.1.0'
             (@($global:SedgRemoteWarnings | Where-Object { $_ -match 'older than baseline' }).Count -gt 0) | Should -Be $true
         } finally {
             Remove-Item function:global:Invoke-WebRequest -ErrorAction SilentlyContinue
             Remove-Item function:global:Write-Warning -ErrorAction SilentlyContinue
+            $script:StateFile = $savedStateFile
+        }
+    }
+    It 'fails when the primary manifest and the GitHub fallback disagree (TOFU cross-check)' {
+        function global:Invoke-WebRequest { param($Uri, $Headers, [switch]$UseBasicParsing, $TimeoutSec, $ErrorAction)
+            if ([string]$Uri -match 'raw.githubusercontent') {
+                return [pscustomobject]@{ Content = $global:SedgFallbackManifestJson }
+            }
+            return [pscustomobject]@{ Content = $global:SedgRemoteManifestJson }
+        }
+        $savedStateFile = $script:StateFile
+        try {
+            $script:ManifestCache = $null
+            $script:InstallerVersion = '1.1.0'
+            $script:NssmVersion = '2.24'
+            $script:NssmSha256 = ('a' * 64)
+            $script:Sources = [pscustomobject]@{ Manifest = 'https://manifest.example/approved-releases.json'; ManifestFallback = 'https://raw.githubusercontent.com/x/y/main/approved-releases.json'; NssmZip = 'https://nssm.cc/release/nssm-2.24.zip' }
+            $base = @{
+                schema = 1; policy = 'approved-only'
+                installer = @{ version = '1.1.0' }
+                components = @{
+                    dnsproxy = @{ tag = 'v0.86.0'; sha256 = ('b' * 64) }
+                    zapret = @{ tag = 'v72.13'; sha256 = ('c' * 64) }
+                }
+            }
+            $global:SedgRemoteManifestJson = ($base | ConvertTo-Json -Depth 5)
+            $evil = (@{ schema = 1; policy = 'approved-only'
+                installer = @{ version = '1.1.0' }
+                components = @{
+                    dnsproxy = @{ tag = 'v0.85.0'; sha256 = ('d' * 64) }
+                    zapret = @{ tag = 'v72.13'; sha256 = ('c' * 64) }
+                } } | ConvertTo-Json -Depth 5)
+            $global:SedgFallbackManifestJson = $evil
+            $script:StateFile = Join-Path $TestDrive 'r1-xcheck-state.json'
+            '{"InstallerVersion":"1.1.0"}' | Set-Content -LiteralPath $script:StateFile -Encoding UTF8
+
+            { Get-ApprovedManifest } | Should -Throw '*cross-check mismatch*'
+
+            $global:SedgFallbackManifestJson = ($base | ConvertTo-Json -Depth 5)
+            $script:ManifestCache = $null
+            $m = Get-ApprovedManifest
+            $m.installer.version | Should -Be '1.1.0'
+        } finally {
+            Remove-Item function:global:Invoke-WebRequest -ErrorAction SilentlyContinue
             $script:StateFile = $savedStateFile
         }
     }
@@ -965,5 +1013,156 @@ Describe 'Write-State upstream_list' {
         $s = Get-Content -LiteralPath $script:StateFile -Raw | ConvertFrom-Json
         $s.Upstream | Should -Be 'https://a.example/dns-query'
         ($null -eq $s.upstream_list) | Should -Be $true
+    }
+}
+
+Describe 'Rollback and live-binary gates (mocked)' {
+    BeforeAll {
+        Import-InstallerFunction 'Set-LocalDns'
+        Import-InstallerFunction 'Get-AdapterDnsSnapshot'
+        Import-InstallerFunction 'Restore-AdapterDnsSnapshot'
+        Import-InstallerFunction 'Install-CommitComponents'
+        Import-InstallerFunction 'Test-LiveBinariesHealthy'
+        # Earlier Describes remove/override these shared stubs in their
+        # AfterAll, so (re)define them per-It via Reset-F11Stubs instead of
+        # relying on any inherited global state.
+        function global:Reset-F11Stubs {
+            function global:Get-NetAdapter { param($Name, $ErrorAction)
+                $global:SedgTestCalls += 'Get-NetAdapter'
+                return [pscustomobject]@{ Name = 'Ethernet'; InterfaceGuid = '{00000000-0000-0000-0000-000000000042}'; ifIndex = 7 }
+            }
+            function global:Get-DnsClientServerAddress { param($InterfaceIndex, $ErrorAction)
+                $global:SedgTestCalls += 'Get-DnsClientServerAddress'
+                return [pscustomobject]@{ ServerAddresses = @('192.168.50.10') }
+            }
+            function global:Get-NetworkAdapters { param([switch]$IncludeVirtual)
+                $global:SedgTestCalls += 'Get-NetworkAdapters'
+                return [pscustomobject]@{ Name = 'Ethernet'; InterfaceGuid = '{00000000-0000-0000-0000-000000000042}'; ifIndex = 7 }
+            }
+            function global:Set-AdapterDnsStatic { param($AdapterName, $V4, $V6)
+                $global:SedgTestCalls += ('Set-AdapterDnsStatic:' + $AdapterName + ':' + (@($V4) + @($V6) -join ','))
+            }
+            function global:Set-AdapterDnsBoth { param($AdapterName, $V4, $V6)
+                $global:SedgTestCalls += ('Set-AdapterDnsBoth:' + $AdapterName + ':' + (@($V4) + @($V6) -join ','))
+            }
+            function global:Set-AdapterDnsFamily { param($AdapterName, $AddressFamily, [switch]$Dhcp)
+                $global:SedgTestCalls += ('Set-AdapterDnsFamily:' + $AdapterName + ':' + $AddressFamily)
+            }
+        }
+    }
+    AfterAll {
+        foreach ($n in @('Set-LocalDns', 'Get-AdapterDnsSnapshot', 'Restore-AdapterDnsSnapshot', 'Install-CommitComponents', 'Test-LiveBinariesHealthy', 'Reset-F11Stubs')) {
+            Remove-Item -LiteralPath ("Function:\{0}" -f $n) -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'restore matches by GUID when the adapter was renamed' {
+        Reset-F11Stubs
+        $global:SedgTestCalls = @()
+        $script:TempPath = Join-Path $TestDrive 'f11-guid-temp'
+        $script:DnsBackupDir = Join-Path $TestDrive 'f11-guid-backup'
+        New-Item -ItemType Directory -Path $script:DnsBackupDir -Force | Out-Null
+        $script:DnsBackupSafe = Join-Path $script:DnsBackupDir 'dns-backup.json'
+        $script:DnsBackupFile = Join-Path (Join-Path $TestDrive 'f11-guid-legacy') 'dns-backup.json'
+        $script:BootstrapTainted = @('1.1.1.1')
+        @{ Adapters = @(@{ Name = 'OldEthernet'; InterfaceGuid = '{00000000-0000-0000-0000-000000000042}'; ifIndex = 7; V4Addresses = @('10.0.0.1'); V6Addresses = @(); V4Static = @('10.0.0.1'); V6Static = @() }) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:DnsBackupSafe -Encoding UTF8
+
+        Restore-DnsSettings
+
+        $global:SedgTestCalls | Should -Contain 'Set-AdapterDnsBoth:Ethernet:10.0.0.1'
+        $global:SedgTestCalls | Should -Not -Contain 'Reset-DnsToDhcp'
+    }
+    It 'restore falls back to name when the GUID is unknown' {
+        Reset-F11Stubs
+        $global:SedgTestCalls = @()
+        $script:TempPath = Join-Path $TestDrive 'f11-name-temp'
+        $script:DnsBackupDir = Join-Path $TestDrive 'f11-name-backup'
+        New-Item -ItemType Directory -Path $script:DnsBackupDir -Force | Out-Null
+        $script:DnsBackupSafe = Join-Path $script:DnsBackupDir 'dns-backup.json'
+        $script:DnsBackupFile = Join-Path (Join-Path $TestDrive 'f11-name-legacy') 'dns-backup.json'
+        $script:BootstrapTainted = @('1.1.1.1')
+        @{ Adapters = @(@{ Name = 'Ethernet'; InterfaceGuid = '{99999999-0000-0000-0000-000000000099}'; ifIndex = 7; V4Addresses = @('10.0.0.1'); V6Addresses = @(); V4Static = @('10.0.0.1'); V6Static = @() }) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:DnsBackupSafe -Encoding UTF8
+
+        Restore-DnsSettings
+
+        $global:SedgTestCalls | Should -Contain 'Set-AdapterDnsBoth:Ethernet:10.0.0.1'
+        $global:SedgTestCalls | Should -Not -Contain 'Reset-DnsToDhcp'
+    }
+    It 'Set-LocalDns rolls back applied adapters on a mid-loop failure' {
+        Reset-F11Stubs
+        function global:Get-NetworkAdapters { param([switch]$IncludeVirtual)
+            $global:SedgTestCalls += 'Get-NetworkAdapters'
+            return @(
+                [pscustomobject]@{ Name = 'Eth0'; InterfaceGuid = '{00000000-0000-0000-0000-000000000070}'; ifIndex = 70 },
+                [pscustomobject]@{ Name = 'Eth1'; InterfaceGuid = '{00000000-0000-0000-0000-000000000071}'; ifIndex = 71 }
+            )
+        }
+        function global:Set-AdapterDnsBoth { param($AdapterName, $V4, $V6)
+            $global:SedgTestCalls += ('Set-AdapterDnsBoth:' + $AdapterName + ':' + (@($V4) + @($V6) -join ','))
+            if ([string]$AdapterName -eq 'Eth1') { throw 'simulated Eth1 failure' }
+        }
+        try {
+            $global:SedgTestCalls = @()
+            $script:DnsBackupDir = Join-Path $TestDrive 'f11-partial-backup'
+            New-Item -ItemType Directory -Path $script:DnsBackupDir -Force | Out-Null
+
+            { Set-LocalDns } | Should -Throw '*Eth1*'
+            # Eth0 applied then restored to its 192.168.50.10 snapshot; Eth1 failed once.
+            @($global:SedgTestCalls | Where-Object { $_ -eq 'Set-AdapterDnsBoth:Eth0:127.0.0.1,::1' }).Count | Should -Be 1
+            $global:SedgTestCalls | Should -Contain 'Set-AdapterDnsBoth:Eth0:192.168.50.10'
+            @($global:SedgTestCalls | Where-Object { $_ -eq 'Set-AdapterDnsBoth:Eth1:127.0.0.1,::1' }).Count | Should -Be 1
+        } finally {
+            Reset-F11Stubs
+        }
+    }
+    It 'commit rollback keeps an identical locked WinDivert64.sys' {
+        $root = Join-Path $TestDrive 'f11-commit'
+        $script:TempPath = Join-Path $root 'staging'
+        $script:DnsProxyPath = Join-Path $root 'live/dnsproxy'
+        $script:ZapretPath = Join-Path $root 'live/zapret'
+        $script:NssmPath = Join-Path $root 'live/nssm.exe'
+        $stageDns = Join-Path $root 'stage/dnsproxy'
+        $stageZap = Join-Path $root 'stage/zapret'
+        foreach ($d in @($script:DnsProxyPath, $script:ZapretPath, $stageDns, $stageZap)) {
+            New-Item -ItemType Directory -Path $d -Force | Out-Null
+        }
+        'live-dnsproxy' | Set-Content -LiteralPath (Join-Path $script:DnsProxyPath 'dnsproxy.exe') -Encoding ASCII -NoNewline
+        'live-winws' | Set-Content -LiteralPath (Join-Path $script:ZapretPath 'winws.exe') -Encoding ASCII -NoNewline
+        'driver-v1' | Set-Content -LiteralPath (Join-Path $script:ZapretPath 'WinDivert64.sys') -Encoding ASCII -NoNewline
+        'live-nssm' | Set-Content -LiteralPath $script:NssmPath -Encoding ASCII -NoNewline
+        'staged-dnsproxy' | Set-Content -LiteralPath (Join-Path $stageDns 'dnsproxy.exe') -Encoding ASCII -NoNewline
+        'staged-winws' | Set-Content -LiteralPath (Join-Path $stageZap 'winws.exe') -Encoding ASCII -NoNewline
+        'driver-v1' | Set-Content -LiteralPath (Join-Path $stageZap 'WinDivert64.sys') -Encoding ASCII -NoNewline
+        $staged = @{ StageDns = $stageDns; StageZap = $stageZap; StageNssm = (Join-Path $root 'stage/missing-nssm.exe') }
+
+        # Production runs with $ErrorActionPreference='Stop'; the test host
+        # defaults to Continue, so force Stop to make the missing-file copy throw.
+        $oldEap = $ErrorActionPreference
+        $ErrorActionPreference = 'Stop'
+        try {
+            { Install-CommitComponents $staged } | Should -Throw
+        } finally {
+            $ErrorActionPreference = $oldEap
+        }
+
+        (Get-Content -LiteralPath (Join-Path $script:ZapretPath 'WinDivert64.sys') -Raw) | Should -Be 'driver-v1'
+        (Get-Content -LiteralPath (Join-Path $script:ZapretPath 'winws.exe') -Raw) | Should -Be 'live-winws'
+        (Get-Content -LiteralPath (Join-Path $script:DnsProxyPath 'dnsproxy.exe') -Raw) | Should -Be 'live-dnsproxy'
+    }
+    It 'Test-LiveBinariesHealthy rejects missing, empty and unreadable binaries' {
+        $root = Join-Path $TestDrive 'f11-live'
+        $script:DnsProxyPath = Join-Path $root 'dnsproxy'
+        $script:ZapretPath = Join-Path $root 'zapret'
+        $script:NssmPath = Join-Path $root 'nssm.exe'
+        New-Item -ItemType Directory -Path $script:DnsProxyPath -Force | Out-Null
+        New-Item -ItemType Directory -Path $script:ZapretPath -Force | Out-Null
+        foreach ($f in @((Join-Path $script:DnsProxyPath 'dnsproxy.exe'), (Join-Path $script:ZapretPath 'winws.exe'), (Join-Path $script:ZapretPath 'cygwin1.dll'), (Join-Path $script:ZapretPath 'WinDivert.dll'), (Join-Path $script:ZapretPath 'WinDivert64.sys'), $script:NssmPath)) {
+            'payload' | Set-Content -LiteralPath $f -Encoding ASCII -NoNewline
+        }
+        (Test-LiveBinariesHealthy) | Should -Be $true
+        '' | Set-Content -LiteralPath (Join-Path $script:ZapretPath 'winws.exe') -Encoding ASCII -NoNewline
+        (Test-LiveBinariesHealthy) | Should -Be $false
+        Remove-Item -LiteralPath (Join-Path $script:ZapretPath 'WinDivert64.sys') -Force
+        (Test-LiveBinariesHealthy) | Should -Be $false
     }
 }

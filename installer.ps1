@@ -13,7 +13,8 @@ param(
     [switch]$DnsOnly,
     [switch]$Purge,
     [switch]$FailClosed,
-    [switch]$AllowSeam
+    [switch]$AllowSeam,
+    [switch]$AllowDowngrade
 )
 
 Set-StrictMode -Version Latest
@@ -716,6 +717,8 @@ function Get-ReleaseAssetUrl([string]$Repository, [string]$Tag, [string]$Asset, 
 }
 
 function Get-ApprovedManifest {
+    param([switch]$AllowDowngrade)
+    try { if (-not $AllowDowngrade -and $script:AllowDowngrade) { $AllowDowngrade = $true } } catch { }
     if ($script:ManifestCache) { return $script:ManifestCache }
     $embedded = [pscustomobject]@{
         schema = 1
@@ -745,6 +748,7 @@ function Get-ApprovedManifest {
 
     $m = $null
     $fromRemote = $false
+    $remoteUri = ''
     $fetchErrors = @()
     foreach ($uri in @($script:Sources.Manifest, $script:Sources.ManifestFallback)) {
         if ([string]::IsNullOrWhiteSpace($uri)) { continue }
@@ -752,9 +756,29 @@ function Get-ApprovedManifest {
             $response = Invoke-WebRequest -Uri $uri -Headers @{ 'User-Agent' = 'Serverless-Edge-DNS-Gateway-Installer' } -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
             $m = $response.Content | ConvertFrom-Json
             $fromRemote = $true
+            $remoteUri = [string]$uri
             break
         } catch {
             $fetchErrors += ('{0}: {1}' -f $uri, $_.Exception.Message)
+        }
+    }
+    # TOFU same-origin cross-check: when the primary (dl.*) answered, fetch
+    # the GitHub fallback out-of-band and compare the pinned subset. A
+    # mismatch means one origin is serving a forged manifest.
+    # shortcut: TOFU, upgrade to signed manifest when key infra exists
+    if ($fromRemote -and ($remoteUri -eq [string]$script:Sources.Manifest) -and (-not [string]::IsNullOrWhiteSpace([string]$script:Sources.ManifestFallback))) {
+        try {
+            $xb = (Invoke-WebRequest -Uri ([string]$script:Sources.ManifestFallback) -Headers @{ 'User-Agent' = 'Serverless-Edge-DNS-Gateway-Installer' } -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop).Content | ConvertFrom-Json
+            foreach ($field in @(@{ P = 'installer.version'; A = $m.installer.version; B = $xb.installer.version },
+                    @{ P = 'dnsproxy'; A = ($m.components.dnsproxy.tag, $m.components.dnsproxy.sha256 -join '|'); B = ($xb.components.dnsproxy.tag, $xb.components.dnsproxy.sha256 -join '|') },
+                    @{ P = 'zapret'; A = ($m.components.zapret.tag, $m.components.zapret.sha256 -join '|'); B = ($xb.components.zapret.tag, $xb.components.zapret.sha256 -join '|') })) {
+                if ([string]$field.A -ne [string]$field.B) {
+                    throw ("Manifest cross-check mismatch on {0}: primary {1} vs GitHub fallback. Refusing to continue." -f $field.P, $remoteUri)
+                }
+            }
+        } catch {
+            if ($_.Exception.Message -match 'cross-check mismatch') { throw }
+            Write-Warning ("Manifest cross-check skipped (fallback unreachable): {0}" -f $_.Exception.Message)
         }
     }
     if (-not $m) {
@@ -783,12 +807,22 @@ function Get-ApprovedManifest {
             foreach ($base in $baselines) {
                 try {
                     if ((-not [string]::IsNullOrWhiteSpace($remoteVer)) -and (-not [string]::IsNullOrWhiteSpace($base)) -and (([System.Version]$remoteVer) -lt ([System.Version]$base))) {
-                        Write-Warning ("Remote manifest declares installer version $remoteVer, older than baseline $base; continuing with the remote manifest (downgrade allowed, confirm this was intended).")
-                        break
+                        $msg = "Remote manifest declares installer version $remoteVer, older than baseline $base."
+                        if ($AllowDowngrade) {
+                            Write-Warning ($msg + ' Continuing with the remote manifest (downgrade allowed, confirm this was intended).')
+                            break
+                        }
+                        throw ($msg + ' Pass -AllowDowngrade only if this downgrade was intended.')
                     }
-                } catch { Write-Verbose $_ }
+                } catch {
+                    if ($_.Exception.Message -match 'Pass -AllowDowngrade') { throw }
+                    Write-Verbose $_
+                }
             }
-        } catch { Write-Verbose $_ }
+        } catch {
+            if ($_.Exception.Message -match 'Pass -AllowDowngrade') { throw }
+            Write-Verbose $_
+        }
     }
 
     if ($m.schema -eq 1 -and $m.policy -eq 'approved-only') {
@@ -867,8 +901,12 @@ function Download-File([string]$Url, [string]$Destination) {
                 throw "curl.exe exited with code $LASTEXITCODE"
             }
 
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-            Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing -Headers @{ 'User-Agent' = 'Serverless-Edge-DNS-Gateway-Installer' }
+            try {
+                [Net.ServicePointManager]::SecurityProtocol = ([Net.SecurityProtocolType]::Tls12 -bor 12288)
+            } catch {
+                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            }
+            Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing -Headers @{ 'User-Agent' = 'Serverless-Edge-DNS-Gateway-Installer' } -TimeoutSec 600
             if (Test-Path $Destination) {
                 return
             }
@@ -1120,6 +1158,21 @@ function Start-AllServices {
         throw ("Service did not remain running: {0} ({1}). NSSM: {2}" -f $script:DnsProxyService, $dns.Status, $nssmStatus)
     }
     Write-Done 'DNSProxy is running.'
+    }
+}
+
+function Set-AdapterDns([string]$AdapterName, [ValidateSet('Family','Static','Both')][string]$Mode = 'Both', [ValidateSet('IPv4','IPv6')][string]$AddressFamily = 'IPv4', [string[]]$ServerAddresses = @(), [string[]]$V4 = @(), [string[]]$V6 = @(), [switch]$Dhcp) {
+    # Single setter behind the three historical wrappers: Family (one family
+    # static/DHCP), Static (both families static in one CIM call), Both
+    # (empty family means DHCP). CIM-then-netsh fallback and validation live
+    # in the wrappers below; this dispatcher only routes.
+    switch ($Mode) {
+        'Family' {
+            if ($Dhcp) { Set-AdapterDnsFamily $AdapterName $AddressFamily -Dhcp }
+            else { Set-AdapterDnsFamily $AdapterName $AddressFamily -ServerAddresses $ServerAddresses }
+        }
+        'Static' { Set-AdapterDnsStatic $AdapterName $V4 $V6 }
+        default { Set-AdapterDnsBoth $AdapterName $V4 $V6 }
     }
 }
 
@@ -1716,7 +1769,7 @@ function Install-StageComponents {
     if ([string]::IsNullOrWhiteSpace($primaryNssm)) { $primaryNssm = $script:Sources.NssmZip }
     $nssmUrls += $primaryNssm
     $mirrorNssm = Get-ManifestString $manifest.components.nssm 'mirror'
-    if ((-not [string]::IsNullOrWhiteSpace($mirrorNssm)) -and ($mirrorNssm -ne $primaryNssm) -and ($mirrorNssm -match '^https://')) {
+    if ((-not [string]::IsNullOrWhiteSpace($mirrorNssm)) -and ($mirrorNssm -ne $primaryNssm) -and (Test-DownloadUrl $mirrorNssm)) {
         $nssmUrls += $mirrorNssm
     }
     Write-Step (((T 'StPrepNssm') -f $nssmVersion))
@@ -1724,15 +1777,15 @@ function Install-StageComponents {
     $nssmZip=Join-Path $script:TempPath 'nssm.zip'
     Write-Host (('  ' + (T 'LbDest') + ': ' + $nssmZip)) -ForegroundColor DarkGray
     $nssmDownloaded = $false
-    $nssmDlError = $null
+    $nssmDlErrors = @()
     foreach ($candidateUrl in $nssmUrls) {
         try {
             Download-File $candidateUrl $nssmZip
             $nssmDownloaded = $true
             break
-        } catch { $nssmDlError = $_.Exception.Message }
+        } catch { $nssmDlErrors += ('{0}: {1}' -f $candidateUrl, $_.Exception.Message) }
     }
-    if (-not $nssmDownloaded) { throw "NSSM download failed: $nssmDlError" }
+    if (-not $nssmDownloaded) { throw ("NSSM download failed: {0}" -f ($nssmDlErrors -join ' | ')) }
     Write-Host (('  ' + (T 'LbSize') + ': ' + ("{0:N0}" -f (Get-Item $nssmZip).Length) + ' ' + (T 'LbBytes'))) -ForegroundColor DarkGray
     $null = Verify-Sha256 $nssmZip $nssmHash (T 'LblNssmArchive')
     $nssmExtract=Join-Path $script:TempPath 'nssm'; Expand-Zip $nssmZip $nssmExtract
@@ -1889,38 +1942,53 @@ function Install-CommitComponents([hashtable]$Staged) {
     }
 }
 
-function Get-UpstreamList {
-    # Ordered valid upstream entries, primary first. Empty when none usable.
-    $list = @()
-    if (Test-Path -LiteralPath $script:ConfigFile -PathType Leaf) {
-        try {
-            $lines = @(Get-Content -LiteralPath $script:ConfigFile -ErrorAction Stop)
-            $inUpstream = $false
-            foreach ($line in $lines) {
-                if ($line -match '^upstream:\s*\[(.*)\]\s*$') {
-                    foreach ($part in ($Matches[1] -split ',')) {
-                        $u = $part.Trim().Trim('"', "'")
-                        if (Test-DnsUpstream $u) { $list += $u }
-                    }
-                    break
+function Get-UpstreamBlock {
+    # Single parser for the dnsproxy `upstream:` block. Returns a span plus
+    # validated entries so list/validate/replace share one code path.
+    # Handles indented comments, trailing comments, and #-in-URL (a # cut
+    # only applies outside quotes, mirroring the historical quote-parity rule).
+    $block = [pscustomobject]@{ Style = 'none'; Start = -1; End = -1; Entries = @() }
+    if (-not (Test-Path -LiteralPath $script:ConfigFile -PathType Leaf)) { return $block }
+    try {
+        $lines = @(Get-Content -LiteralPath $script:ConfigFile -ErrorAction Stop)
+    } catch { Write-Warning ('SEDG:Get-UpstreamBlock: $lines = @(Get-Content -LiteralPath $script:ConfigFile -ErrorA... (' + $_.Exception.Message + ')'); Write-Verbose $_; return $block }
+    $entries = @()
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $line = [string]$lines[$i]
+        if ($line -match '^upstream:\s*\[(.*)\]\s*$') {
+            foreach ($part in ($Matches[1] -split ',')) {
+                $u = $part.Trim().Trim('"', "'")
+                if (Test-DnsUpstream $u) { $entries += $u }
+            }
+            $block.Style = 'flow'; $block.Start = $i; $block.End = $i
+            break
+        }
+        if ($line -match '^upstream:\s*$') {
+            $block.Style = 'block'; $block.Start = $i; $block.End = $i
+            for ($j = $i + 1; $j -lt $lines.Count; $j++) {
+                $inner = [string]$lines[$j]
+                if ($inner -match '^\s*#') { $block.End = $j; continue }
+                if ($inner -match '^\S') { break }
+                $block.End = $j
+                $code = $inner
+                foreach ($cut in [regex]::Matches($code, '\s+#')) {
+                    if ((($code.Substring(0, $cut.Index) -replace "[^'""]", '').Length % 2) -eq 0) { $code = $code.Substring(0, $cut.Index); break }
                 }
-                if ($line -match '^upstream:\s*$') { $inUpstream = $true; continue }
-                if ($inUpstream) {
-                    if ($line -match '^\s*#') { continue }
-                    if ($line -match '^\S') { break }
-                    $code = $line
-                    foreach ($cut in [regex]::Matches($code, '\s+#')) {
-                        if ((($code.Substring(0, $cut.Index) -replace "[^'""]", '').Length % 2) -eq 0) { $code = $code.Substring(0, $cut.Index); break }
-                    }
-                    if ($code -match '^\s*-\s*["'']?([^''"\s]+)["'']?\s*$') {
-                        $u = $Matches[1].Trim()
-                        if (Test-DnsUpstream $u) { $list += $u }
-                    }
+                if ($code -match '^\s*-\s*["'']?([^''"\s]+)["'']?\s*$') {
+                    $u = $Matches[1].Trim()
+                    if (Test-DnsUpstream $u) { $entries += $u }
                 }
             }
-        } catch { Write-Warning ('SEDG:Get-UpstreamList: $lines = @(Get-Content -LiteralPath $script:ConfigFile -ErrorA... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+            break
+        }
     }
-    return $list
+    $block.Entries = $entries
+    return $block
+}
+
+function Get-UpstreamList {
+    # Ordered valid upstream entries, primary first. Empty when none usable.
+    return @((Get-UpstreamBlock).Entries)
 }
 
 function Get-ConfiguredUpstream {
@@ -1984,10 +2052,11 @@ function Test-ConfigValid {
     try {
         if (-not (Test-Path -LiteralPath $script:ConfigFile -PathType Leaf)) { return $false }
         $raw = Get-Content -LiteralPath $script:ConfigFile -Raw -ErrorAction Stop
-        if (-not [regex]::IsMatch($raw, '(?m)^upstream:\s*$')) { return $false }
+        if (-not [regex]::IsMatch($raw, '(?m)^upstream:\s*$')) {
+            if (-not [regex]::IsMatch($raw, '(?m)^upstream:\s*\[.*\]')) { return $false }
+        }
         if (-not [regex]::IsMatch($raw, '(?m)^listen-ports:\s*$')) { return $false }
-        $tail = $raw.Substring($raw.IndexOf('upstream:'))
-        return [regex]::IsMatch($tail, '(?m)^\s*-\s*([''"]?)(https?|tls|h3|quic):')
+        return (@((Get-UpstreamBlock).Entries).Count -gt 0)
     } catch { return $false }
 }
 function Ensure-Config {
@@ -2032,9 +2101,8 @@ function Set-UpstreamInConfig([string]$Upstream) {
     $content = Get-Content -LiteralPath $script:ConfigFile -Raw -ErrorAction Stop
     $newline = if ($content.Contains("`r`n")) { "`r`n" } else { "`n" }
     $normalized = $content -replace "`r`n", "`n"
-    $pattern = '(?ms)^upstream:\s*\n(?:^[ \t]*-[^\r\n]*\n?)+'
-    $flowPattern = '(?m)^upstream:\s*\[.*\]'
-    if ((-not [regex]::IsMatch($normalized, $pattern)) -and (-not [regex]::IsMatch($normalized, $flowPattern))) { throw "Could not locate a valid upstream block in $($script:ConfigFile)." }
+    $block = Get-UpstreamBlock
+    if ([string]$block.Style -eq 'none') { throw "Could not locate a valid upstream block in $($script:ConfigFile)." }
     # Multi-upstream: promote-or-prepend the selected entry; the rest stays in
     # order as standby. Defaults are never evicted; cap 8 drops the oldest
     # custom first (position = recency, index 0 is newest).
@@ -2048,11 +2116,24 @@ function Set-UpstreamInConfig([string]$Upstream) {
         Write-Warning (('Upstream list exceeds 8 entries; removed oldest custom entry: {0}' -f $evict))
     }
     $replacement = ("upstream:`n" + (($list | ForEach-Object { "  - $_" }) -join "`n") + "`n").Replace('$', '$$')
-    if ([regex]::IsMatch($normalized, $flowPattern)) {
+    if ([string]$block.Style -eq 'flow') {
         # Flow-style single line: replace the whole line, still emit block-style.
+        $flowPattern = '(?m)^upstream:\s*\[.*\]'
         $updated = ([regex]$flowPattern).Replace($normalized, $replacement, 1)
     } else {
+        $pattern = '(?ms)^upstream:\s*\n(?:^[ \t]*-[^\r\n]*\n?)+'
         $updated = ([regex]$pattern).Replace($normalized, $replacement, 1)
+        if ($updated -eq $normalized) {
+            # Comment-first layouts (a `#` line right after `upstream:`) do
+            # not match the dash-run pattern: splice by the parsed span.
+            $rawLines = @($normalized -split "`n")
+            $before = @()
+            if ([int]$block.Start -gt 0) { $before = $rawLines[0..([int]$block.Start - 1)] }
+            $after = @()
+            if (([int]$block.End + 1) -lt $rawLines.Count) { $after = $rawLines[([int]$block.End + 1)..($rawLines.Count - 1)] }
+            $updated = (($before + @($replacement.TrimEnd("`n"))) + $after) -join "`n"
+            if (-not $updated.EndsWith("`n")) { $updated += "`n" }
+        }
     }
     if ($newline -eq "`r`n") { $updated = $updated -replace "`n", "`r`n" }
     Set-Content -LiteralPath $script:ConfigFile -Value $updated -Encoding UTF8 -NoNewline
@@ -2129,9 +2210,20 @@ function Set-SystemDns {
     }
 
     Write-Step (T 'DnsApplying')
+    $applied = @()
     foreach ($adapter in $adapters) {
         Write-Host (('  ' + (T 'LbAdapter') + ': ' + $adapter.Name)) -ForegroundColor DarkGray
-        Set-AdapterDnsBoth $adapter.Name $v4 $v6
+        $snapshot = $null
+        try { $snapshot = Get-AdapterDnsSnapshot $adapter.ifIndex } catch { Write-Warning ('Could not snapshot DNS on adapter ''' + $adapter.Name + ''': ' + $_.Exception.Message) }
+        try {
+            Set-AdapterDnsBoth $adapter.Name $v4 $v6
+        } catch {
+            foreach ($done in $applied) {
+                try { Restore-AdapterDnsSnapshot $done.Name $done.Snapshot } catch { Write-Warning ('Could not restore DNS on adapter ''' + $done.Name + ''': ' + $_.Exception.Message) }
+            }
+            throw
+        }
+        $applied += @{ Name = $adapter.Name; Snapshot = $snapshot }
     }
 
     Clear-DnsClientCache
@@ -2374,6 +2466,17 @@ $FailClosedFile = Join-Path $InstallPath 'fail-closed'
 $WinwsService = '%%WINWSSERVICE%%'
 $DnsProxyService = '%%DNSPROXYSERVICE%%'
 
+# Single-instance guard: reuse the installer mutex so two watchdog ticks (or
+# a tick racing Install/Update) never double-count failures. The handle dies
+# with this process; an abandoned hold is treated as acquired.
+$WatchdogMutex = $null
+$WatchdogAcquired = $true
+try {
+    $WatchdogMutex = New-Object System.Threading.Mutex($false, 'Global\SEDG-Installer')
+    try { $WatchdogAcquired = $WatchdogMutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $WatchdogAcquired = $true }
+} catch { $WatchdogAcquired = $true }
+if (-not $WatchdogAcquired) { exit 0 }
+
 function Get-UpAdapters {
     Get-NetAdapter -ErrorAction SilentlyContinue |
         Where-Object { $_.Status -eq 'Up' -and $_.InterfaceDescription -notlike '*Loopback*' }
@@ -2455,13 +2558,13 @@ foreach ($t in $targets) {
 if ($healthy) {
     try { Remove-Item -LiteralPath $CountFile -Force -ErrorAction SilentlyContinue } catch { Write-Warning ('SEDG:Watchdog: Remove-Item -LiteralPath $CountFile -Force -ErrorAction Sile... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     if ($failedOver) {
-        foreach ($a in @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' })) {
+        foreach ($a in @(Get-UpAdapters)) {
             Set-DnsLocal $a.Name $a.ifIndex
         }
         Reset-ResolverCache
         try { Remove-Item -LiteralPath $FlagFile -Force -ErrorAction SilentlyContinue } catch { Write-Warning ('SEDG:Watchdog: Remove-Item -LiteralPath $FlagFile -Force -ErrorAction Silen... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     } else {
-        foreach ($a in @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' })) {
+        foreach ($a in @(Get-UpAdapters)) {
             try {
                 $all = @(Get-DnsClientServerAddress -InterfaceIndex $a.ifIndex -ErrorAction Stop | Select-Object -ExpandProperty ServerAddresses)
                 if (($all -contains '127.0.0.1') -or ($all -contains '::1')) { continue }
@@ -2475,7 +2578,9 @@ if ($healthy) {
 $n = 0
 try { $n = [int](Get-Content -LiteralPath $CountFile -Raw -ErrorAction Stop) } catch { Write-Warning ('SEDG:Watchdog: $n = [int](Get-Content -LiteralPath $CountFile -Raw -ErrorAc... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 $n++
-try { $n | Set-Content -LiteralPath $CountFile -Encoding ASCII -NoNewline -Force } catch { Write-Warning ('SEDG:Watchdog: $n | Set-Content -LiteralPath $CountFile -Encoding ASCII -No... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+# Atomic counter: temp+rename so a killed tick never leaves a half-written count.
+$CountTmp = "$CountFile.tmp"
+try { $n | Set-Content -LiteralPath $CountTmp -Encoding ASCII -NoNewline -Force; Move-Item -LiteralPath $CountTmp -Destination $CountFile -Force } catch { Write-Warning ('SEDG:Watchdog: $n | Set-Content -LiteralPath $CountFile -Encoding ASCII -No... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 if ($n -ge 3) {
     # M6 fail-closed: with the marker present the gateway stays on local DNS
     # (no traffic leaks to the ISP) instead of falling back to DHCP.
@@ -2760,9 +2865,19 @@ function Test-DnsProxyListeners {
         $udp6 = @($udp | Where-Object { [string]$_.LocalAddress -eq '::1' })
         $tcp6 = @($tcp | Where-Object { [string]$_.LocalAddress -eq '::1' })
         if (-not ($udp6 -and $tcp6)) {
+            $requiresV6 = $false
+            try {
+                if (Test-Path -LiteralPath $script:ConfigFile -PathType Leaf) {
+                    $requiresV6 = [bool]((Get-Content -LiteralPath $script:ConfigFile -Raw -ErrorAction Stop) -match '::1')
+                }
+            } catch { Write-Verbose $_ }
+            if ($requiresV6) { throw 'DNSProxy is not listening on ::1:53 but the config requires it.' }
             Write-Host (('  ' + (Get-ViInfo 'Local DNS IPv6 ::1: not listening.'))) -ForegroundColor Yellow
         }
-    } catch { Write-Warning ('SEDG:Test-DnsProxyListeners: $udp6 = @($udp | Where-Object { [string]$_.LocalAddress -eq ... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+    } catch {
+        if ($_.Exception.Message -match 'not listening on ::1:53 but the config requires it') { throw }
+        Write-Warning ('SEDG:Test-DnsProxyListeners: $udp6 = @($udp | Where-Object { [string]$_.LocalAddress -eq ... (' + $_.Exception.Message + ')'); Write-Verbose $_
+    }
 }
 function Write-State([string]$DnsProxyRelease, [string]$ZapretRelease, [string]$Upstream = $null, [string[]]$UpstreamList = $null) {
     if ([string]::IsNullOrWhiteSpace($Upstream)) { $Upstream = Get-ConfiguredUpstream }
@@ -2915,6 +3030,9 @@ function Install-All {
         Set-InstallerBootstrapDns
         $staged = Install-StageComponents -AllowSeam:$AllowSeam
         if (-not $staged) { throw 'Component staging failed.' }
+        # Downloads are done: restore the pre-bootstrap DNS snapshot now, so
+        # the commit phase below runs on clean DNS even if it throws later.
+        try { Restore-DnsSettings } catch { Write-Warning ('SEDG:Install-All: Restore-DnsSettings (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     } catch {
         try { Restore-DnsSettings } catch { Write-Warning ('SEDG:Install-All: Restore-DnsSettings (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         throw
@@ -3035,6 +3153,24 @@ function Install-All {
     }
 }
 
+function Test-LiveBinariesHealthy {
+    # Early-skip gate: all 6 live binaries must exist, be non-empty and
+    # hash-readable. Existence alone can mask a truncated/corrupt install.
+    foreach ($p in @((Join-Path $script:DnsProxyPath 'dnsproxy.exe'),
+            (Join-Path $script:ZapretPath 'winws.exe'),
+            (Join-Path $script:ZapretPath 'cygwin1.dll'),
+            (Join-Path $script:ZapretPath 'WinDivert.dll'),
+            (Join-Path $script:ZapretPath 'WinDivert64.sys'),
+            $script:NssmPath)) {
+        try {
+            if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { return $false }
+            if ((Get-Item -LiteralPath $p -ErrorAction Stop).Length -le 0) { return $false }
+            $null = Get-FileHash -LiteralPath $p -Algorithm SHA256 -ErrorAction Stop
+        } catch { return $false }
+    }
+    return $true
+}
+
 function Update-All {
     param([switch]$Clean, [switch]$DnsOnly, [switch]$FailClosed, [switch]$AllowSeam)
     Ensure-Administrator
@@ -3068,12 +3204,7 @@ function Update-All {
             $cur0 = Get-StateReleases
             if (($cur0[0] -eq [string]$m0.components.dnsproxy.tag) -and
                 ($cur0[1] -eq [string]$m0.components.zapret.tag) -and
-                (Test-Path (Join-Path $script:DnsProxyPath 'dnsproxy.exe')) -and
-                (Test-Path (Join-Path $script:ZapretPath 'winws.exe')) -and
-                (Test-Path (Join-Path $script:ZapretPath 'cygwin1.dll')) -and
-                (Test-Path (Join-Path $script:ZapretPath 'WinDivert.dll')) -and
-                (Test-Path (Join-Path $script:ZapretPath 'WinDivert64.sys')) -and
-                (Test-Path -LiteralPath $script:NssmPath)) {
+                (Test-LiveBinariesHealthy)) {
                 $earlySkip = $true
             }
         } catch { $earlySkip = $false }
@@ -3084,6 +3215,9 @@ function Update-All {
             Set-InstallerBootstrapDns
             $staged = Install-StageComponents -AllowSeam:$AllowSeam
             if (-not $staged) { throw 'Component staging failed.' }
+            # Downloads are done: restore the pre-bootstrap DNS snapshot now,
+            # so the commit phase below runs on clean DNS even if it throws.
+            try { Restore-DnsSettings } catch { Write-Warning ('SEDG:Update-All: Restore-DnsSettings (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         } catch {
             try { Restore-DnsSettings } catch { Write-Warning ('SEDG:Update-All: Restore-DnsSettings (' + $_.Exception.Message + ')'); Write-Verbose $_ }
             throw
@@ -3095,12 +3229,7 @@ function Update-All {
         $curRel = Get-StateReleases
         if (($curRel[0] -eq $staged.DnsRelease) -and
             ($curRel[1] -eq $staged.ZapRelease) -and
-            (Test-Path (Join-Path $script:DnsProxyPath 'dnsproxy.exe')) -and
-            (Test-Path (Join-Path $script:ZapretPath 'winws.exe')) -and
-            (Test-Path (Join-Path $script:ZapretPath 'cygwin1.dll')) -and
-            (Test-Path (Join-Path $script:ZapretPath 'WinDivert.dll')) -and
-            (Test-Path (Join-Path $script:ZapretPath 'WinDivert64.sys')) -and
-            (Test-Path -LiteralPath $script:NssmPath)) {
+            (Test-LiveBinariesHealthy)) {
             $skipCommit = $true
         }
     }
@@ -3299,6 +3428,18 @@ function Get-LocalDnsV4AdapterNames {
     return $names
 }
 
+function Get-LocalDnsV6AdapterNames {
+    $names = @()
+    try {
+        foreach ($adapter in (Get-NetworkAdapters -IncludeVirtual)) {
+            $dns = @(Get-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ErrorAction SilentlyContinue)
+            $all = @($dns | Select-Object -ExpandProperty ServerAddresses)
+            if ($all -contains '::1') { $names += $adapter.Name }
+        }
+    } catch { Write-Warning ('SEDG:Get-LocalDnsV6AdapterNames: foreach ($adapter in (Get-NetworkAdapters -IncludeVirtual)) ... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+    return $names
+}
+
 function Show-Status {
     Write-CreditBanner
     Write-Title (T 'StTitle')
@@ -3308,6 +3449,15 @@ function Show-Status {
     $dnsService = Get-Service -Name $script:DnsProxyService -ErrorAction SilentlyContinue
 
     $localDnsV4 = @(Get-LocalDnsV4AdapterNames).Count -gt 0
+    $localDnsV6 = @(Get-LocalDnsV6AdapterNames).Count -gt 0
+    # The stock template listens on ::1 too: when the config requires it,
+    # readiness must include a v6 adapter, not just 127.0.0.1.
+    $needsV6 = $false
+    try {
+        if (Test-Path -LiteralPath $script:ConfigFile -PathType Leaf) {
+            $needsV6 = [bool]((Get-Content -LiteralPath $script:ConfigFile -Raw -ErrorAction Stop) -match '::1')
+        }
+    } catch { Write-Verbose $_ }
 
     $dnsRelease = 'Unknown'
     $zapretRelease = 'Unknown'
@@ -3325,7 +3475,7 @@ function Show-Status {
 
     $winwsRunning = $winwsService -and $winwsService.Status -eq 'Running'
     $dnsRunning = $dnsService -and $dnsService.Status -eq 'Running'
-    $ready = $installed -and $winwsRunning -and $dnsRunning -and $localDnsV4
+    $ready = $installed -and $winwsRunning -and $dnsRunning -and $localDnsV4 -and ((-not $needsV6) -or $localDnsV6)
 
     $upstreamShown = T 'VNA'
     $upstreamOk = $false
@@ -3353,6 +3503,7 @@ function Show-Status {
 
     Write-Section (T 'StNetwork')
     Write-StatusLine $localDnsV4 (T 'StLocalV4') $(if ($localDnsV4) { '127.0.0.1' } else { T 'VNotActive' })
+    if ($needsV6) { Write-StatusLine $localDnsV6 'Local DNS IPv6' $(if ($localDnsV6) { '::1' } else { T 'VNotActive' }) }
     Write-StatusLine ($installed -and $upstreamOk) (T 'MnUpstream') $(if ($installed) { $upstreamShown } else { T 'VNA' })
     Write-StatusLine $ready (T 'StGw') $(if ($ready) { T 'VActive' } else { T 'VAttention' })
 

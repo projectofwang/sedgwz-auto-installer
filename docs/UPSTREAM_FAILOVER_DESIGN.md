@@ -1,6 +1,6 @@
-# Upstream failover — locked design (chưa implement)
+# Upstream failover — locked design (đã implement một phần, commit 00a31c2)
 
-Trạng thái: decisions đã chốt với user (2026-10-11). Implement sau khi đo latency VN.
+Trạng thái: decisions đã chốt với user (2026-10-11) và implement một phần trong `installer.ps1`: `Get-UpstreamList` (:1892), template 6 upstreams + `timeout: 5s` (:1949-1965), `upstream_list` trong `state.json` (:2778), mode `load_balance` native (M7, :1949).
 
 ## Quyết định đã chốt
 

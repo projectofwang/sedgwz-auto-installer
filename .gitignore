@@ -17,3 +17,8 @@ testResults.xml
 
 # Integration smoke fixture server root (regenerable)
 tests/integration/site/
+
+# Local agent scratch (regenerable, never commit)
+.archify/
+.slim/
+.ua/
