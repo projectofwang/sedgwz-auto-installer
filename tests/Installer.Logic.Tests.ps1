@@ -43,8 +43,10 @@ Import-InstallerFunction 'Get-OurProcesses'
 Import-InstallerFunction 'Get-StaticDnsServers'
 Import-InstallerFunction 'Get-ConfiguredUpstream'
 Import-InstallerFunction 'Get-AssetDownloadBase'
+Import-InstallerFunction 'Test-Administrator'
 Import-InstallerFunction 'Test-DownloadUrl'
 Import-InstallerFunction 'Download-File'
+Import-InstallerFunction 'Set-UpstreamInConfig'
 # Test-CDNOptimization runs under StrictMode Latest in production
 # (installer.ps1:18); inject the same into the extracted copy so the
 # suite catches strict-only failures like the PS7 ResponseTime rename.
@@ -104,6 +106,61 @@ upstream:
 "@ | Set-Content -LiteralPath $script:ConfigFile
         (Get-ConfiguredUpstream) | Should -Be 'tls://dns.example'
     }
+    It 'keeps Taiyuan SDNS (Default) first (R3 regression pin)' {
+        $tokens = $null; $errs = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($global:SEDGInstallerPath, [ref]$tokens, [ref]$errs)
+        $assign = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$script:OptionalUpstreams' }, $true)
+        $assign | Should -Not -BeNullOrEmpty
+        Invoke-Expression $assign.Extent.Text
+        @($script:OptionalUpstreams.Keys)[0] | Should -Be 'Taiyuan SDNS (Default)'
+    }
+    It 'ignores full-line and trailing comments when reading upstream' {
+        $script:ConfigFile = Join-Path $TestDrive 'upstream-comments.yaml'
+        $script:StateFile = Join-Path $TestDrive 'upstream-comments-state.json'
+        @"
+upstream:
+  # primary resolver, rotated weekly
+  - https://dns.example/dns-query # main
+  - https://fallback.example/dns-query
+"@ | Set-Content -LiteralPath $script:ConfigFile
+        (Get-ConfiguredUpstream) | Should -Be 'https://dns.example/dns-query'
+
+        @"
+upstream:
+  # - https://evil.example/dns-query
+  - tls://dns.example
+"@ | Set-Content -LiteralPath $script:ConfigFile
+        (Get-ConfiguredUpstream) | Should -Be 'tls://dns.example'
+    }
+    It 'replaces flow-style upstream with block-style' {
+        function global:Ensure-Config { }
+        try {
+            $script:ConfigFile = Join-Path $TestDrive 'flow.yaml'
+            "listen-ports:`n  - 53`nupstream: [https://old.example/dns-query]`nfallback:`n  - https://cloudflare-dns.com/dns-query`n" | Set-Content -LiteralPath $script:ConfigFile -Encoding UTF8 -NoNewline
+            Set-UpstreamInConfig 'https://new.example/dns-query'
+            $out = Get-Content -LiteralPath $script:ConfigFile -Raw
+            $out | Should -Match '(?m)^upstream:\s*$'
+            $out | Should -Match '(?m)^\s*-\s*https://new\.example/dns-query\s*$'
+            $out | Should -Not -Match '\[https://old'
+            $out | Should -Match '(?m)^fallback:\s*$'
+            $script:StateFile = Join-Path $TestDrive 'flow-state.json'
+            (Get-ConfiguredUpstream) | Should -Be 'https://new.example/dns-query'
+        } finally {
+            Remove-Item function:global:Ensure-Config -ErrorAction SilentlyContinue
+        }
+    }
+    It 'console upstream prints are redacted to host+path (no query string)' {
+        $u = 'https://sdns.example/dns-query?token=secret'
+        $redacted = (([uri]$u).Host + ([uri]$u).AbsolutePath)
+        $redacted | Should -Be 'sdns.example/dns-query'
+        $redacted | Should -Not -Match 'secret'
+        $src = Get-Content -LiteralPath $global:SEDGInstallerPath -Raw
+        ([regex]::Matches($src, "\`$upLog = '\[redacted\]'")).Count | Should -Be 3
+        $src | Should -Match "\`$upstreamShown = '\[redacted\]'"
+        $src | Should -Match '\(\$upUri\.Host \+ \$upUri\.AbsolutePath\)'
+        $src | Should -Not -Match "\(T 'UpChanged'\) \+ `$SelectedUpstream"
+        $src | Should -Not -Match "' \+ \(T 'MnUpstream'\) \+ ': ' \+ `$sumUp\)"
+    }
 }
 
 Describe 'Asset download seam' {
@@ -117,8 +174,32 @@ Describe 'Asset download seam' {
         $env:SEDG_ASSET_BASE_URL = 'http://127.0.0.1:18081'
         try {
             $script:AllowedReleaseRepos = @('AdguardTeam/dnsproxy', 'bol-van/zapret')
-            (Get-ReleaseAssetUrl 'AdguardTeam/dnsproxy' 'v0.86.0' 'a.zip') | Should -Be 'http://127.0.0.1:18081/AdguardTeam/dnsproxy/releases/download/v0.86.0/a.zip'
+            (Get-ReleaseAssetUrl 'AdguardTeam/dnsproxy' 'v0.86.0' 'a.zip' -AllowSeam) | Should -Be 'http://127.0.0.1:18081/AdguardTeam/dnsproxy/releases/download/v0.86.0/a.zip'
             { Get-ReleaseAssetUrl 'evil/repo' 'v1' 'a.zip' } | Should -Throw
+        } finally {
+            Remove-Item Env:SEDG_ASSET_BASE_URL -ErrorAction SilentlyContinue
+        }
+    }
+    It 'ignores the seam when elevated unless -AllowSeam is passed' {
+        Mock Test-Administrator { return $true }
+        Mock Write-Warning { }
+        $env:SEDG_ASSET_BASE_URL = 'http://127.0.0.1:18081'
+        try {
+            (Get-AssetDownloadBase) | Should -Be 'https://github.com'
+            Should -Invoke Write-Warning -Times 0 -Exactly
+            (Get-AssetDownloadBase -AllowSeam) | Should -Be 'http://127.0.0.1:18081'
+            Should -Invoke Write-Warning -Times 1 -Exactly
+        } finally {
+            Remove-Item Env:SEDG_ASSET_BASE_URL -ErrorAction SilentlyContinue
+        }
+    }
+    It 'honors the seam with a warning when not elevated' {
+        Mock Test-Administrator { return $false }
+        Mock Write-Warning { }
+        $env:SEDG_ASSET_BASE_URL = 'http://127.0.0.1:18081'
+        try {
+            (Get-AssetDownloadBase) | Should -Be 'http://127.0.0.1:18081'
+            Should -Invoke Write-Warning -Times 1 -Exactly
         } finally {
             Remove-Item Env:SEDG_ASSET_BASE_URL -ErrorAction SilentlyContinue
         }
@@ -254,6 +335,13 @@ Describe 'Test-ConfigValid' {
         "hello`n" | Set-Content -LiteralPath $script:ConfigFile -Encoding UTF8 -NoNewline
         (Test-ConfigValid) | Should -Be $false
     }
+    It 'rejects comment-only upstream blocks' {
+        $script:ConfigFile = Join-Path $TestDrive 'comment-only.yaml'
+        "listen-ports:`n  - 53`nupstream:`n  # - https://fake.example/dns-query`n" | Set-Content -LiteralPath $script:ConfigFile -Encoding UTF8 -NoNewline
+        (Test-ConfigValid) | Should -Be $false
+        "listen-ports:`n  - 53`nupstream:`n  - # https://fake.example/dns-query`n" | Set-Content -LiteralPath $script:ConfigFile -Encoding UTF8 -NoNewline
+        (Test-ConfigValid) | Should -Be $false
+    }
 }
 
 Describe 'Get-WinwsParameters' {
@@ -361,7 +449,8 @@ Describe 'Boot resilience (no network after reboot)' {
     It 'LocalService can traverse the admin-only install dir' {
         $src = Get-Content -LiteralPath $global:SEDGInstallerPath -Raw
         $src | Should -Match "InstallPath /grant '\*S-1-5-19:\(OI\)\(CI\)RX'"
-        $src | Should -Match "DnsProxyPath /grant '\*S-1-5-19:\(OI\)\(CI\)M'"
+        $src | Should -Match "dnsLogFile /grant '\*S-1-5-19:M'"
+        $src | Should -Not -Match "DnsProxyPath /grant '\*S-1-5-19:\(OI\)\(CI\)M'"
     }
     It 'update always refreshes state, even on skipped commit' {
         $src = Get-Content -LiteralPath $global:SEDGInstallerPath -Raw

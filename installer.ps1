@@ -12,7 +12,8 @@ param(
     [switch]$Clean,
     [switch]$DnsOnly,
     [switch]$Purge,
-    [switch]$FailClosed
+    [switch]$FailClosed,
+    [switch]$AllowSeam
 )
 
 Set-StrictMode -Version Latest
@@ -66,10 +67,12 @@ try {
 # Single source of truth for install layout, pinned versions and upstream
 # sources. Values below are the historical defaults and never change here;
 # SEDG_INSTALL_PATH / SEDG_MANIFEST_URL only override them when explicitly
-# set (optional, for tests and packaging - nothing requires them).
+# set (optional, for tests and packaging - nothing requires them). The seams
+# are ignored when elevated unless -AllowSeam is passed.
 
 $script:InstallerVersion = '1.2.0'
-if (-not [string]::IsNullOrWhiteSpace($env:SEDG_INSTALL_PATH)) {
+if ((-not [string]::IsNullOrWhiteSpace($env:SEDG_INSTALL_PATH)) -and ($AllowSeam -or (-not (Test-Administrator)))) {
+    Write-Warning 'SEDG_INSTALL_PATH test seam is active; install layout leaves the default.'
     $script:InstallPath = $env:SEDG_INSTALL_PATH
 } else {
     $script:InstallPath = 'C:\serverless-edge-dns-gateway'
@@ -102,7 +105,10 @@ $script:WatchdogFlag = Join-Path $script:InstallPath 'watchdog-fallback.flag'
 $script:WatchdogCount = Join-Path $script:InstallPath 'watchdog-count.txt'
 
 $script:manifestUrl = 'https://dl.taiyuanwangjie.dpdns.org/approved-releases.json'
-if (-not [string]::IsNullOrWhiteSpace($env:SEDG_MANIFEST_URL)) { $script:manifestUrl = $env:SEDG_MANIFEST_URL }
+if ((-not [string]::IsNullOrWhiteSpace($env:SEDG_MANIFEST_URL)) -and ($AllowSeam -or (-not (Test-Administrator)))) {
+    Write-Warning 'SEDG_MANIFEST_URL test seam is active; manifest source leaves the default.'
+    $script:manifestUrl = $env:SEDG_MANIFEST_URL
+}
 $script:Sources = @{
     Manifest         = $script:manifestUrl
     ManifestFallback = 'https://raw.githubusercontent.com/projectofwang/sedgwz-auto-installer/main/approved-releases.json'
@@ -532,6 +538,7 @@ function Ensure-Administrator {
     if ($DnsOnly) { $elevArgs += '-DnsOnly' }
     if ($Purge) { $elevArgs += '-Purge' }
     if ($FailClosed) { $elevArgs += '-FailClosed' }
+    if ($AllowSeam) { $elevArgs += '-AllowSeam' }
     if ($script:Lang -in @('EN','VI')) { $elevArgs += @('-Language', $script:Lang) }
     Start-Process powershell.exe -Verb RunAs -ArgumentList $elevArgs
     Exit-Installer 0
@@ -675,18 +682,23 @@ function Test-DownloadUrl([string]$Url) {
 }
 
 function Get-AssetDownloadBase {
+    param([switch]$AllowSeam)
     # Test/packaging seam: SEDG_ASSET_BASE_URL redirects component downloads
     # to an alternative origin (a CI fixture server). Unset in production:
     # downloads stay pinned to https://github.com. Repository/tag/asset
     # allow-listing and per-file SHA-256 pinning still apply regardless of
     # the origin, so the seam only changes where bytes come from, not which
-    # bytes are accepted.
+    # bytes are accepted. Ignored when elevated unless -AllowSeam is passed.
     $base = [string]$env:SEDG_ASSET_BASE_URL
     if ([string]::IsNullOrWhiteSpace($base)) { return 'https://github.com' }
-    return $base.TrimEnd('/')
+    if ($AllowSeam -or (-not (Test-Administrator))) {
+        Write-Warning 'SEDG_ASSET_BASE_URL test seam is active; downloads leave the pinned origin.'
+        return $base.TrimEnd('/')
+    }
+    return 'https://github.com'
 }
 
-function Get-ReleaseAssetUrl([string]$Repository, [string]$Tag, [string]$Asset) {
+function Get-ReleaseAssetUrl([string]$Repository, [string]$Tag, [string]$Asset, [switch]$AllowSeam) {
     # Direct release download: no unauthenticated GitHub API calls, so no
     # 60 req/hour rate-limit failures behind shared IPs (CGNAT).
     if ($script:AllowedReleaseRepos -notcontains $Repository) {
@@ -698,7 +710,7 @@ function Get-ReleaseAssetUrl([string]$Repository, [string]$Tag, [string]$Asset) 
     if ([string]::IsNullOrWhiteSpace($Asset) -or ($Asset -notmatch '^[\w][\w.\-]*$')) {
         throw "Invalid release asset name: $Asset"
     }
-    return "{0}/{1}/releases/download/{2}/{3}" -f (Get-AssetDownloadBase), $Repository, $Tag, $Asset
+    return "{0}/{1}/releases/download/{2}/{3}" -f (Get-AssetDownloadBase -AllowSeam:$AllowSeam), $Repository, $Tag, $Asset
 }
 
 function Get-ApprovedManifest {
@@ -730,12 +742,14 @@ function Get-ApprovedManifest {
     }
 
     $m = $null
+    $fromRemote = $false
     $fetchErrors = @()
     foreach ($uri in @($script:Sources.Manifest, $script:Sources.ManifestFallback)) {
         if ([string]::IsNullOrWhiteSpace($uri)) { continue }
         try {
-            $response = Invoke-WebRequest -Uri $uri -Headers @{ 'User-Agent' = 'Serverless-Edge-DNS-Gateway-Installer' } -UseBasicParsing -ErrorAction Stop
+            $response = Invoke-WebRequest -Uri $uri -Headers @{ 'User-Agent' = 'Serverless-Edge-DNS-Gateway-Installer' } -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
             $m = $response.Content | ConvertFrom-Json
+            $fromRemote = $true
             break
         } catch {
             $fetchErrors += ('{0}: {1}' -f $uri, $_.Exception.Message)
@@ -753,6 +767,26 @@ function Get-ApprovedManifest {
 
     if ($null -eq $m) {
         throw 'Approved manifest is empty.'
+    }
+
+    # R1/Opt-C (warn-only): the manifest host is trusted, so a compromised
+    # host can replay an older but valid manifest (downgrade). Warn when the
+    # remote trails the embedded or last-run baseline; validation below keeps
+    # its hard-throw policy and legitimate flows are unchanged.
+    if ($fromRemote) {
+        try {
+            $remoteVer = [string]$m.installer.version
+            $baselines = @([string]$embedded.installer.version)
+            try { if (Test-Path -LiteralPath $script:StateFile -PathType Leaf) { $baselines += [string](Get-Content -LiteralPath $script:StateFile -Raw -ErrorAction Stop | ConvertFrom-Json).InstallerVersion } } catch { Write-Verbose $_ }
+            foreach ($base in $baselines) {
+                try {
+                    if ((-not [string]::IsNullOrWhiteSpace($remoteVer)) -and (-not [string]::IsNullOrWhiteSpace($base)) -and (([System.Version]$remoteVer) -lt ([System.Version]$base))) {
+                        Write-Warning ("Remote manifest declares installer version $remoteVer, older than baseline $base; continuing with the remote manifest (downgrade allowed, confirm this was intended).")
+                        break
+                    }
+                } catch { Write-Verbose $_ }
+            }
+        } catch { Write-Verbose $_ }
     }
 
     if ($m.schema -eq 1 -and $m.policy -eq 'approved-only') {
@@ -1024,6 +1058,7 @@ function Schedule-DeleteTreeOnReboot([string]$Path) {
 }
 
 function Start-AllServices {
+    param([switch]$DnsOnly)
     # Low: rotate runaway dnsproxy --output log (no built-in rotation).
     try {
         $dnsLog = Join-Path $script:DnsProxyPath 'dnsproxy.log'
@@ -1330,8 +1365,10 @@ function Backup-DnsSettings {
         } catch { Write-Warning ('SEDG:Backup-DnsSettings: New-Item -ItemType Directory -Path $script:TempPath -Force |... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         try {
             Set-SecureAcl $script:DnsBackupDir
-            if ((-not (Test-Path -LiteralPath $script:DnsBackupSafe -PathType Leaf)) -or (-not $tainted)) {
+            if (-not $tainted) {
                 $json | Set-Content -LiteralPath $script:DnsBackupSafe -Encoding UTF8
+            } elseif (-not (Test-Path -LiteralPath $script:DnsBackupSafe -PathType Leaf)) {
+                Write-Warning 'Backup-DnsSettings: no safe baseline, skipping safe-backup write (live DNS is tainted).'
             }
         } catch { Write-Warning ('SEDG:Backup-DnsSettings: Set-SecureAcl $script:DnsBackupDir if ((-not (Test-Path -Lit... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     } catch { Write-Warning ('SEDG:Backup-DnsSettings: $snapshot = @() foreach ($adapter in @(Get-NetworkAdapters -... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
@@ -1345,6 +1382,7 @@ function Restore-DnsSettings {
     # to keep the backup file for another attempt.
     $restoredAny = $false
     $unmatchedEntries = $false
+    $backupPath = $null
     $script:DnsRestoreIncomplete = $false
     try {
         $backupPath = $null
@@ -1389,6 +1427,7 @@ function Restore-DnsSettings {
                     } else {
                         Set-AdapterDnsFamily $targetName IPv4 -Dhcp
                         Set-AdapterDnsFamily $targetName IPv6 -Dhcp
+                        $restoredAny = $true
                     }
                 } catch {
                     $script:DnsRestoreIncomplete = $true
@@ -1407,7 +1446,11 @@ function Restore-DnsSettings {
     }
     if ($unmatchedEntries) { $script:DnsRestoreIncomplete = $true }
     if (-not $restoredAny) {
-        try { Reset-DnsToDhcp } catch { Write-Warning ('SEDG:Restore-DnsSettings: Reset-DnsToDhcp (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        if ($backupPath) {
+            try { Reset-DnsToDhcp } catch { Write-Warning ('SEDG:Restore-DnsSettings: Reset-DnsToDhcp (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        } else {
+            Write-Warning 'Restore-DnsSettings: no backup file found; skipping global DHCP reset.'
+        }
         return
     }
     try { Clear-DnsClientCache; ipconfig /flushdns | Out-Null } catch { Write-Warning ('SEDG:Restore-DnsSettings: Clear-DnsClientCache; ipconfig /flushdns | Out-Null (' + $_.Exception.Message + ')'); Write-Verbose $_ }
@@ -1578,6 +1621,7 @@ function Set-InstallerBootstrapDns {
 }
 
 function Install-StageComponents {
+    param([switch]$AllowSeam)
     Write-Step 'Preparing component installation...'
     Write-Host (('  ' + (T 'LbStaging') + ': ' + $script:TempPath)) -ForegroundColor DarkGray
     if (Test-Path $script:TempPath) {
@@ -1603,8 +1647,8 @@ function Install-StageComponents {
     $zapTag = [string]$manifest.components.zapret.tag
     $dnsAssetName = [string]$manifest.components.dnsproxy.asset
     $zapAssetName = [string]$manifest.components.zapret.asset
-    $dnsDownloadUrl = Get-ReleaseAssetUrl ([string]$manifest.components.dnsproxy.repository) $dnsTag $dnsAssetName
-    $zapDownloadUrl = Get-ReleaseAssetUrl ([string]$manifest.components.zapret.repository) $zapTag $zapAssetName
+    $dnsDownloadUrl = Get-ReleaseAssetUrl ([string]$manifest.components.dnsproxy.repository) $dnsTag $dnsAssetName -AllowSeam:$AllowSeam
+    $zapDownloadUrl = Get-ReleaseAssetUrl ([string]$manifest.components.zapret.repository) $zapTag $zapAssetName -AllowSeam:$AllowSeam
     Write-Host (('  ' + (T 'LbVersions') + ': DNSProxy ' + $dnsTag + ' | Zapret ' + $zapTag)) -ForegroundColor DarkGray
     Write-Host (('  ' + (T 'LbAssetDns') + ': ' + $dnsAssetName)) -ForegroundColor DarkGray
     Write-Host (('  ' + (T 'LbAssetZap') + ': ' + $zapAssetName)) -ForegroundColor DarkGray
@@ -1851,8 +1895,13 @@ function Get-ConfiguredUpstream {
             foreach ($line in $lines) {
                 if ($line -match '^upstream:\s*$') { $inUpstream = $true; continue }
                 if ($inUpstream) {
+                    if ($line -match '^\s*#') { continue }
                     if ($line -match '^\S') { break }
-                    if ($line -match '^\s*-\s*["'']?([^''"\s]+)["'']?\s*$') {
+                    $code = $line
+                    foreach ($cut in [regex]::Matches($code, '\s+#')) {
+                        if ((($code.Substring(0, $cut.Index) -replace "[^'""]", '').Length % 2) -eq 0) { $code = $code.Substring(0, $cut.Index); break }
+                    }
+                    if ($code -match '^\s*-\s*["'']?([^''"\s]+)["'']?\s*$') {
                         $configured = $Matches[1].Trim()
                         if (Test-DnsUpstream $configured) { return $configured }
                     }
@@ -1915,7 +1964,7 @@ function Test-ConfigValid {
         if (-not [regex]::IsMatch($raw, '(?m)^upstream:\s*$')) { return $false }
         if (-not [regex]::IsMatch($raw, '(?m)^listen-ports:\s*$')) { return $false }
         $tail = $raw.Substring($raw.IndexOf('upstream:'))
-        return [regex]::IsMatch($tail, '(?m)^\s*-\s*\S+')
+        return [regex]::IsMatch($tail, '(?m)^\s*-\s*([''"]?)(https?|tls|h3|quic):')
     } catch { return $false }
 }
 function Ensure-Config {
@@ -1961,10 +2010,16 @@ function Set-UpstreamInConfig([string]$Upstream) {
     $newline = if ($content.Contains("`r`n")) { "`r`n" } else { "`n" }
     $normalized = $content -replace "`r`n", "`n"
     $pattern = '(?ms)^upstream:\s*\n(?:^[ \t]*-[^\r\n]*\n?)+'
-    if (-not [regex]::IsMatch($normalized, $pattern)) { throw "Could not locate a valid upstream block in $($script:ConfigFile)." }
+    $flowPattern = '(?m)^upstream:\s*\[.*\]'
+    if ((-not [regex]::IsMatch($normalized, $pattern)) -and (-not [regex]::IsMatch($normalized, $flowPattern))) { throw "Could not locate a valid upstream block in $($script:ConfigFile)." }
     # M7: replace only the upstream block; fallback/bootstrap/cache stay intact.
     $replacement = ("upstream:`n  - $Upstream`n").Replace('$', '$$')
-    $updated = ([regex]$pattern).Replace($normalized, $replacement, 1)
+    if ([regex]::IsMatch($normalized, $flowPattern)) {
+        # Flow-style single line: replace the whole line, still emit block-style.
+        $updated = ([regex]$flowPattern).Replace($normalized, $replacement, 1)
+    } else {
+        $updated = ([regex]$pattern).Replace($normalized, $replacement, 1)
+    }
     if ($newline -eq "`r`n") { $updated = $updated -replace "`n", "`r`n" }
     Set-Content -LiteralPath $script:ConfigFile -Value $updated -Encoding UTF8 -NoNewline
     Write-Done (((T 'DoneUpstreamChanged') -f $Upstream))
@@ -2086,7 +2141,9 @@ function Set-Upstream([string]$SelectedUpstream = $null) {
         Write-Title (T 'UpTitle')
         $presetNames = @($script:OptionalUpstreams.Keys)
         for ($i = 0; $i -lt $presetNames.Count; $i++) {
-            Write-Host ('  [{0}] {1} - {2}' -f ($i + 1), $presetNames[$i], $script:OptionalUpstreams[$presetNames[$i]])
+            $upLog = '[redacted]'
+            try { $upUri = [uri]$script:OptionalUpstreams[$presetNames[$i]]; $upLog = ($upUri.Host + $upUri.AbsolutePath) } catch { Write-Verbose $_ }
+            Write-Host ('  [{0}] {1} - {2}' -f ($i + 1), $presetNames[$i], $upLog)
         }
         $customIndex = $presetNames.Count + 1
         Write-Host ('  [{0}] {1}' -f $customIndex, (T 'UpOpt2'))
@@ -2118,7 +2175,9 @@ function Set-Upstream([string]$SelectedUpstream = $null) {
         throw $origErr
     }
     Restart-DnsProxyService 'DNSProxy did not remain running after upstream change.'
-    Write-Host ((T 'UpChanged') + $SelectedUpstream) -ForegroundColor Green
+    $upLog = '[redacted]'
+    try { $upUri = [uri]$SelectedUpstream; $upLog = ($upUri.Host + $upUri.AbsolutePath) } catch { Write-Verbose $_ }
+    Write-Host ((T 'UpChanged') + $upLog) -ForegroundColor Green
 }
 
 function Set-Language([string]$SelectedLang = $null) {
@@ -2272,8 +2331,8 @@ $FlagFile = Join-Path $InstallPath 'watchdog-fallback.flag'
 $CountFile = Join-Path $InstallPath 'watchdog-count.txt'
 $EnabledFile = Join-Path $InstallPath 'gateway-enabled'
 $FailClosedFile = Join-Path $InstallPath 'fail-closed'
-$WinwsService = 'winws-service'
-$DnsProxyService = 'dnsproxy-service'
+$WinwsService = '%%WINWSSERVICE%%'
+$DnsProxyService = '%%DNSPROXYSERVICE%%'
 
 function Get-UpAdapters {
     Get-NetAdapter -ErrorAction SilentlyContinue |
@@ -2390,7 +2449,7 @@ if ($n -ge 3) {
 }
 exit 0
 '@
-    $content = $template.Replace('%%INSTALLPATH%%', $script:InstallPath)
+    $content = $template.Replace('%%INSTALLPATH%%', $script:InstallPath).Replace('%%WINWSSERVICE%%', $script:WinwsService).Replace('%%DNSPROXYSERVICE%%', $script:DnsProxyService)
     [IO.File]::WriteAllText($script:WatchdogScript, $content, [Text.UTF8Encoding]::new($false))
 }
 
@@ -2408,6 +2467,7 @@ function Set-GatewayEnabled([bool]$Enabled) {
 }
 
 function Install-Watchdog {
+    param([switch]$FailClosed)
     Write-Step 'Installing DNS watchdog...'
     Write-WatchdogFile
     Clear-WatchdogState
@@ -2491,6 +2551,7 @@ function Remove-Services {
 }
 
 function Create-Services {
+    param([switch]$DnsOnly)
     Write-Step 'Creating and configuring Windows services...'
     Remove-Services
 
@@ -2547,8 +2608,10 @@ function Create-Services {
     try {
         & icacls.exe $script:InstallPath /grant '*S-1-5-19:(OI)(CI)RX' | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "icacls could not grant LocalService read access on $($script:InstallPath) (exit code $LASTEXITCODE)." }
-        & icacls.exe $script:DnsProxyPath /grant '*S-1-5-19:(OI)(CI)M' | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "icacls could not grant LocalService modify access on $($script:DnsProxyPath) (exit code $LASTEXITCODE)." }
+        $dnsLogFile = Join-Path $script:DnsProxyPath 'dnsproxy.log'
+        try { if (-not (Test-Path -LiteralPath $dnsLogFile -PathType Leaf)) { New-Item -ItemType File -Path $dnsLogFile -Force | Out-Null } } catch { Write-Warning ('SEDG:Create-Services: if (-not (Test-Path -LiteralPath $dnsLogFile -PathType Leaf)) { New... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+        & icacls.exe $dnsLogFile /grant '*S-1-5-19:M' | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "icacls could not grant LocalService modify access on $($dnsLogFile) (exit code $LASTEXITCODE)." }
         Invoke-Nssm @('set', $script:DnsProxyService, 'ObjectName', 'NT AUTHORITY\LocalService', '')
     } catch { Write-Warning ('SEDG:Create-Services: & icacls.exe $script:InstallPath /grant ''*S-1-5-19:(OI)(CI)R... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     # Boot resilience: restart the wrapper when the app exits early
@@ -2780,6 +2843,7 @@ function Update-ManagerFromDist([string]$ForAction) {
 }
 
 function Install-All {
+    param([switch]$Clean, [switch]$DnsOnly, [switch]$FailClosed, [switch]$AllowSeam)
     Ensure-Administrator
     Test-Platform
     Enter-InstallerMutex
@@ -2795,7 +2859,7 @@ function Install-All {
         try { Exit-InstallerMutex } catch { Write-Warning ('SEDG:Install-All: Exit-InstallerMutex (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         try { Stop-OpTranscript } catch { Write-Warning ('SEDG:Install-All: Stop-OpTranscript (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         $script:InstallerMutex = $null; $script:MutexDepth = 0; $script:OpTranscript = $null
-        Update-All
+        Update-All -Clean:$Clean -DnsOnly:$DnsOnly -FailClosed:$FailClosed -AllowSeam:$AllowSeam
         return
     }
     if (Update-ManagerFromDist 'Install') { return }
@@ -2806,7 +2870,7 @@ function Install-All {
     Write-Step 'Preparing fresh installation...'
     try {
         Set-InstallerBootstrapDns
-        $staged = Install-StageComponents
+        $staged = Install-StageComponents -AllowSeam:$AllowSeam
         if (-not $staged) { throw 'Component staging failed.' }
     } catch {
         try { Restore-DnsSettings } catch { Write-Warning ('SEDG:Install-All: Restore-DnsSettings (' + $_.Exception.Message + ')'); Write-Verbose $_ }
@@ -2842,7 +2906,7 @@ function Install-All {
             try {
                 Rename-Item -LiteralPath $script:InstallPath -NewName (Split-Path -Leaf $oldDir) -ErrorAction Stop
             } catch {
-                try { Start-AllServices } catch { Write-Warning ('SEDG:Install-All: Start-AllServices (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+                try { Start-AllServices -DnsOnly:$DnsOnly } catch { Write-Warning ('SEDG:Install-All: Start-AllServices (' + $_.Exception.Message + ')'); Write-Verbose $_ }
                 try { Restore-DnsSettings } catch { Write-Warning ('SEDG:Install-All: Restore-DnsSettings (' + $_.Exception.Message + ')'); Write-Verbose $_ }
                 throw 'Install directory is locked. Reboot Windows, then retry with -Clean.'
             }
@@ -2901,17 +2965,17 @@ function Install-All {
             }
             New-Item -ItemType File -Path $dnsLog -Force | Out-Null
         } catch { Write-Warning ('SEDG:Install-All: if ((Test-Path -LiteralPath $dnsLog) -and ((Get-Item -Litera... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
-        Create-Services
+        Create-Services -DnsOnly:$DnsOnly
         Write-Manager
-        Install-Watchdog
+        Install-Watchdog -FailClosed:$FailClosed
         Set-GatewayEnabled $true
         Write-Step 'Starting configured services...'
-        Start-AllServices
+        Start-AllServices -DnsOnly:$DnsOnly
         Test-DnsProxyListeners
         Set-LocalDns
         Write-State $staged.DnsRelease $staged.ZapRelease
         try { $oldLeft = $script:InstallPath + '-old'; Remove-Item -LiteralPath $oldLeft -Recurse -Force -ErrorAction SilentlyContinue } catch { Write-Warning ('SEDG:Install-All: $oldLeft = $script:InstallPath + ''-old''; Remove-Item -Litera... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
-        Remove-Item -LiteralPath $script:TempPath -Recurse -Force -ErrorAction SilentlyContinue
+        try { Remove-Item -LiteralPath $script:TempPath -Recurse -Force -ErrorAction SilentlyContinue } catch { Write-Warning ('SEDG:Install-All: Remove-Item -LiteralPath $script:TempPath -Recurse -Force -ErrorAction SilentlyContinue (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     } catch {
         # A failed install must not leave a half-created service behind.
         try { Stop-AllServices } catch { Write-Warning ('SEDG:Install-All: Stop-AllServices (' + $_.Exception.Message + ')'); Write-Verbose $_ }
@@ -2929,6 +2993,7 @@ function Install-All {
 }
 
 function Update-All {
+    param([switch]$Clean, [switch]$DnsOnly, [switch]$FailClosed, [switch]$AllowSeam)
     Ensure-Administrator
     Test-Platform
     Enter-InstallerMutex
@@ -2940,7 +3005,7 @@ function Update-All {
         try { Exit-InstallerMutex } catch { Write-Warning ('SEDG:Update-All: Exit-InstallerMutex (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         try { Stop-OpTranscript } catch { Write-Warning ('SEDG:Update-All: Stop-OpTranscript (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         $script:InstallerMutex = $null; $script:MutexDepth = 0; $script:OpTranscript = $null
-        Install-All
+        Install-All -Clean:$Clean -DnsOnly:$DnsOnly -FailClosed:$FailClosed -AllowSeam:$AllowSeam
         return
     }
 
@@ -2974,7 +3039,7 @@ function Update-All {
     if (-not $earlySkip) {
         try {
             Set-InstallerBootstrapDns
-            $staged = Install-StageComponents
+            $staged = Install-StageComponents -AllowSeam:$AllowSeam
             if (-not $staged) { throw 'Component staging failed.' }
         } catch {
             try { Restore-DnsSettings } catch { Write-Warning ('SEDG:Update-All: Restore-DnsSettings (' + $_.Exception.Message + ')'); Write-Verbose $_ }
@@ -3014,12 +3079,12 @@ function Update-All {
         Ensure-Config
         Write-Blacklist
         Write-WinwsArgs
-        Create-Services
+        Create-Services -DnsOnly:$DnsOnly
         Write-Manager
-        Install-Watchdog
+        Install-Watchdog -FailClosed:$FailClosed
         Set-GatewayEnabled $true
         Clear-WatchdogState
-        Start-AllServices
+        Start-AllServices -DnsOnly:$DnsOnly
         Set-LocalDns
         # Always refresh state (even when binaries were already current):
         # a skipped commit must still record the running InstallerVersion,
@@ -3039,7 +3104,7 @@ function Update-All {
         $origErr = $_.Exception.Message
         $extra = @()
         try { Stop-AllServices } catch { $extra += ('stop: ' + $_.Exception.Message) }
-        try { Start-AllServices } catch { $extra += ('start: ' + $_.Exception.Message) }
+        try { Start-AllServices -DnsOnly:$DnsOnly } catch { $extra += ('start: ' + $_.Exception.Message) }
         try { Restore-DnsSettings } catch { $extra += ('dns: ' + $_.Exception.Message) }
         if ($extra.Count -gt 0) { throw ($origErr + ' [recovery: ' + ($extra -join '; ') + ']') }
         throw
@@ -3071,7 +3136,7 @@ function Resume-All {
     Write-Title ('Serverless Edge DNS Gateway with Zapret DPI Bypass - Auto Installer - ' + (T 'MiResume'))
     if (-not (Test-Path $script:InstallPath)) { throw (T 'NotFound') }
     Clear-WatchdogState
-    Start-AllServices
+    Start-AllServices -DnsOnly:$DnsOnly
     try {
         Set-LocalDns
     } catch {
@@ -3095,7 +3160,7 @@ function Restart-All {
 
     Stop-AllServices
     try {
-        Start-AllServices
+        Start-AllServices -DnsOnly:$DnsOnly
         Set-LocalDns
     } catch {
         $origErr = $_.Exception.Message
@@ -3223,7 +3288,11 @@ function Show-Status {
     $upstreamOk = $false
     try {
         $u = Get-ConfiguredUpstream
-        if (Test-DnsUpstream $u) { $upstreamShown = $u; $upstreamOk = $true }
+        if (Test-DnsUpstream $u) {
+            $upstreamShown = '[redacted]'
+            try { $upUri = [uri]$u; $upstreamShown = ($upUri.Host + $upUri.AbsolutePath) } catch { Write-Verbose $_ }
+            $upstreamOk = $true
+        }
     } catch { Write-Warning ('SEDG:Show-Status: $u = Get-ConfiguredUpstream if (Test-DnsUpstream $u) { $upst... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     $configExists = Test-Path -LiteralPath $script:ConfigFile
 
@@ -3443,8 +3512,10 @@ function Show-InstallSummary {
     try {
         $sumRel = Get-StateReleases
         $sumUp = Get-ConfiguredUpstream
+        $upLog = '[redacted]'
+        try { $upUri = [uri]$sumUp; $upLog = ($upUri.Host + $upUri.AbsolutePath) } catch { Write-Verbose $_ }
         Write-Host ("  DNSProxy {0} | Zapret {1}" -f $sumRel[0], $sumRel[1]) -ForegroundColor DarkGray
-        Write-Host ('  ' + (T 'MnUpstream') + ': ' + $sumUp) -ForegroundColor DarkGray
+        Write-Host ('  ' + (T 'MnUpstream') + ': ' + $upLog) -ForegroundColor DarkGray
     } catch { Write-Warning ('SEDG:Show-InstallSummary: $sumRel = Get-StateReleases $sumUp = Get-ConfiguredUpstream ... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     Write-Host ('  ' + (T 'SumHint')) -ForegroundColor DarkGray
     Write-Host ""
@@ -3565,8 +3636,8 @@ function Show-Menu {
         $choice = Read-Host (T 'PmtSelect')
         try {
             switch ($choice) {
-                '1' { Install-All }
-                '2' { Update-All }
+                '1' { Install-All -Clean:$Clean -DnsOnly:$DnsOnly -FailClosed:$FailClosed -AllowSeam:$AllowSeam }
+                '2' { Update-All -Clean:$Clean -DnsOnly:$DnsOnly -FailClosed:$FailClosed -AllowSeam:$AllowSeam }
                 '3' { Show-Status }
                 '4' { Restart-All }
                 '5' { Pause-All }
@@ -3593,13 +3664,12 @@ function Show-Menu {
     }
 }
 
-Clear-StaleTempInstallers
-
 $script:ExitCode = 0
 try {
+    Clear-StaleTempInstallers
     switch ($Action) {
-        'Install' { Install-All }
-        'Update' { Update-All }
+        'Install' { Install-All -Clean:$Clean -DnsOnly:$DnsOnly -FailClosed:$FailClosed -AllowSeam:$AllowSeam }
+        'Update' { Update-All -Clean:$Clean -DnsOnly:$DnsOnly -FailClosed:$FailClosed -AllowSeam:$AllowSeam }
         'Pause' { Pause-All }
         'Resume' { Resume-All }
         'Restart' { Restart-All }

@@ -125,7 +125,7 @@ BeforeAll {
     function global:Set-AdapterDnsBoth { param($AdapterName, $V4, $V6)
         $global:SedgTestCalls += ('Set-AdapterDnsBoth:' + $AdapterName + ':' + (@($V4) + @($V6) -join ','))
     }
-    function global:Set-AdapterDnsFamily { param($AdapterName, $AddressFamily, $Dhcp)
+    function global:Set-AdapterDnsFamily { param($AdapterName, $AddressFamily, [switch]$Dhcp)
         $global:SedgTestCalls += ('Set-AdapterDnsFamily:' + $AdapterName + ':' + $AddressFamily)
     }
     function global:Reset-DnsToDhcp { param($IncludeVirtual) $global:SedgTestCalls += 'Reset-DnsToDhcp' }
@@ -260,6 +260,37 @@ Describe 'Get-ApprovedManifest offline' {
         Assert-ManifestComponents $m
         $m.components.dnsproxy.tag | Should -Be 'v0.86.0'
     }
+    It 'warns but still uses a remote manifest older than the last baseline' {
+        function global:Invoke-WebRequest { param($Uri, $Headers, [switch]$UseBasicParsing, $TimeoutSec, $ErrorAction)
+            return [pscustomobject]@{ Content = $global:SedgRemoteManifestJson }
+        }
+        function global:Write-Warning { param($Message) $global:SedgRemoteWarnings += [string]$Message }
+        $savedStateFile = $script:StateFile
+        try {
+            $global:SedgRemoteWarnings = @()
+            $script:ManifestCache = $null
+            $script:InstallerVersion = '1.1.0'
+            $script:NssmVersion = '2.24'
+            $script:NssmSha256 = ('a' * 64)
+            $script:Sources = [pscustomobject]@{ Manifest = 'https://manifest.example/approved-releases.json'; ManifestFallback = ''; NssmZip = 'https://nssm.cc/release/nssm-2.24.zip' }
+            $global:SedgRemoteManifestJson = (@{
+                schema = 1; policy = 'approved-only'
+                installer = @{ version = '1.1.0' }
+                components = @{ dnsproxy = @{ tag = 'v0.86.0' }; zapret = @{ tag = 'v72.13' } }
+            } | ConvertTo-Json -Depth 5)
+            $script:StateFile = Join-Path $TestDrive 'r1-state.json'
+            '{"InstallerVersion":"1.2.0"}' | Set-Content -LiteralPath $script:StateFile -Encoding UTF8
+
+            $m = Get-ApprovedManifest
+
+            $m.installer.version | Should -Be '1.1.0'
+            (@($global:SedgRemoteWarnings | Where-Object { $_ -match 'older than baseline' }).Count -gt 0) | Should -Be $true
+        } finally {
+            Remove-Item function:global:Invoke-WebRequest -ErrorAction SilentlyContinue
+            Remove-Item function:global:Write-Warning -ErrorAction SilentlyContinue
+            $script:StateFile = $savedStateFile
+        }
+    }
 }
 
 Describe 'Test-ConfigValid' {
@@ -346,6 +377,50 @@ Describe 'DNS backup/restore (mocked)' {
         $global:SedgTestCalls | Should -Not -Contain 'Reset-DnsToDhcp'
         $global:SedgTestCalls | Should -Not -Contain 'Set-AdapterDnsFamily:Ethernet:IPv4'
     }
+    It 'tainted first-time backup writes diagnostics but no safe file' {
+        $global:SedgTestCalls = @()
+        $script:TempPath = Join-Path $TestDrive 'dns-r5-temp'
+        $script:DnsBackupDir = Join-Path $TestDrive 'dns-r5-backup'
+        New-Item -ItemType Directory -Path $script:DnsBackupDir -Force | Out-Null
+        $script:DnsBackupSafe = Join-Path $script:DnsBackupDir 'dns-backup.json'
+        $script:DnsBackupFile = Join-Path (Join-Path $TestDrive 'dns-r5-legacy') 'dns-backup.json'
+        $script:BootstrapTainted = @('192.168.50.10')
+
+        Backup-DnsSettings
+
+        (Test-Path -LiteralPath $script:DnsBackupSafe -PathType Leaf) | Should -Be $false
+        (Test-Path -LiteralPath (Join-Path $script:TempPath 'dns-backup.json') -PathType Leaf) | Should -Be $true
+    }
+    It 'all-DHCP baseline restore replays per-adapter without a global reset' {
+        $global:SedgTestCalls = @()
+        $script:TempPath = Join-Path $TestDrive 'dns-r4a-temp'
+        $script:DnsBackupDir = Join-Path $TestDrive 'dns-r4a-backup'
+        New-Item -ItemType Directory -Path $script:DnsBackupDir -Force | Out-Null
+        $script:DnsBackupSafe = Join-Path $script:DnsBackupDir 'dns-backup.json'
+        $script:DnsBackupFile = Join-Path (Join-Path $TestDrive 'dns-r4a-legacy') 'dns-backup.json'
+        $script:BootstrapTainted = @('1.1.1.1', '8.8.8.8', '2606:4700:4700::1111')
+        @{ Adapters = @(@{ Name = 'Ethernet'; InterfaceGuid = '{00000000-0000-0000-0000-000000000042}'; ifIndex = 7; V4Addresses = @('1.1.1.1'); V6Addresses = @(); V4Static = $null; V6Static = $null }) } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $script:DnsBackupSafe -Encoding UTF8
+
+        Restore-DnsSettings
+
+        $global:SedgTestCalls | Should -Contain 'Set-AdapterDnsFamily:Ethernet:IPv4'
+        $global:SedgTestCalls | Should -Contain 'Set-AdapterDnsFamily:Ethernet:IPv6'
+        $global:SedgTestCalls | Should -Contain 'Clear-DnsClientCache'
+        $global:SedgTestCalls | Should -Not -Contain 'Reset-DnsToDhcp'
+    }
+    It 'restore without any backup file leaves adapters untouched' {
+        $global:SedgTestCalls = @()
+        $script:TempPath = Join-Path $TestDrive 'dns-r4b-temp'
+        $script:DnsBackupDir = Join-Path $TestDrive 'dns-r4b-backup'
+        New-Item -ItemType Directory -Path $script:DnsBackupDir -Force | Out-Null
+        $script:DnsBackupSafe = Join-Path $script:DnsBackupDir 'dns-backup.json'
+        $script:DnsBackupFile = Join-Path (Join-Path $TestDrive 'dns-r4b-legacy') 'dns-backup.json'
+        $script:BootstrapTainted = @('1.1.1.1')
+
+        Restore-DnsSettings
+
+        $global:SedgTestCalls | Should -BeNullOrEmpty
+    }
 }
 
 Describe 'Service lifecycle (mocked)' {
@@ -381,7 +456,7 @@ Describe 'Service lifecycle (mocked)' {
         New-Item -ItemType Directory -Path (Split-Path -Parent $script:NssmPath) -Force | Out-Null
         '@exit 0' | Set-Content -LiteralPath $script:NssmPath -Encoding ASCII
 
-        Start-AllServices
+        Start-AllServices -DnsOnly:$script:DnsOnly
 
         ($global:SedgTestCalls -join "`n") | Should -Be (@(
             "Start-Service:$($script:WinwsService)",
@@ -430,7 +505,7 @@ Describe 'Service lifecycle (mocked)' {
         $script:NssmPath = Join-Path $script:InstallPath 'nssm.cmd'
         '@exit 0' | Set-Content -LiteralPath $script:NssmPath -Encoding ASCII
 
-        Create-Services
+        Create-Services -DnsOnly:$script:DnsOnly
 
         Assert-CallOrder @(
             "Get-Service:$($script:WinwsService)",
@@ -547,8 +622,8 @@ Describe 'Watchdog script (generated, executed against stubs)' {
         Set-Content -LiteralPath (Join-Path $script:InstallPath 'gateway-enabled') -Value 'on' -Encoding ASCII
         Set-Content -LiteralPath (Join-Path $script:InstallPath 'state.json') -Value '{"Upstream":"https://dns.example/dns-query"}' -Encoding ASCII
         $global:SedgServices = @{
-            'winws-service'    = [pscustomobject]@{ Name = 'winws-service'; Status = 'Stopped'; StartType = 'Automatic' }
-            'dnsproxy-service' = [pscustomobject]@{ Name = 'dnsproxy-service'; Status = 'Stopped'; StartType = 'Automatic' }
+            $script:WinwsService    = [pscustomobject]@{ Name = $script:WinwsService; Status = 'Stopped'; StartType = 'Automatic' }
+            $script:DnsProxyService = [pscustomobject]@{ Name = $script:DnsProxyService; Status = 'Stopped'; StartType = 'Automatic' }
         }
         $global:SedgWatchdogDns = @('127.0.0.1')
         $global:SedgDnsHealthy = $true
@@ -557,8 +632,8 @@ Describe 'Watchdog script (generated, executed against stubs)' {
 
         & $script:WatchdogScript
 
-        $global:SedgWatchdogCalls | Should -Contain 'Start-Service:winws-service'
-        $global:SedgWatchdogCalls | Should -Contain 'Start-Service:dnsproxy-service'
+        $global:SedgWatchdogCalls | Should -Contain ('Start-Service:' + $script:WinwsService)
+        $global:SedgWatchdogCalls | Should -Contain ('Start-Service:' + $script:DnsProxyService)
         $global:SedgWatchdogCalls | Should -Contain 'Resolve:dns.example'
         Test-Path -LiteralPath (Join-Path $script:InstallPath 'watchdog-count.txt') | Should -BeFalse
         Test-Path -LiteralPath (Join-Path $script:InstallPath 'watchdog-fallback.flag') | Should -BeFalse
@@ -630,6 +705,14 @@ Describe 'Watchdog script (generated, executed against stubs)' {
         & $script:WatchdogScript
 
         $global:SedgWatchdogCalls | Should -BeNullOrEmpty
+    }
+
+    It 'generated watchdog embeds the configured service names' {
+        $gen = Get-Content -LiteralPath $script:WatchdogScript -Raw
+        $gen | Should -Match ('\$WinwsService = ''' + $script:WinwsService + '''')
+        $gen | Should -Match ('\$DnsProxyService = ''' + $script:DnsProxyService + '''')
+        $gen | Should -Not -Match '%%WINWSSERVICE%%'
+        $gen | Should -Not -Match '%%DNSPROXYSERVICE%%'
     }
 }
 

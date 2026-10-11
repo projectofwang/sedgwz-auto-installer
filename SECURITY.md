@@ -16,10 +16,24 @@ Install while online. Always update before reporting an issue.
   landing page has the 3 steps: download the file, compare its SHA-256 with
   `version.json`, then run it.
 - Component binaries are pinned by SHA-256 in `approved-releases.json`.
+  The WinDivert driver is trusted through that same manifest hash; it is
+  not separately checked for an Authenticode signature.
 - The manifest is trusted through HTTPS and a matching installer/manifest
   version. Anyone who can push to `main` or publish the Cloudflare deployment
   can change which binaries users install. `main` blocks force-pushes, `v*`
   tags are immutable, and the Cloudflare account needs 2FA.
+- Manager self-update downloads `installer.ps1` from the same distribution
+  origin, hash-pinned by `version.json`. That is unsigned script execution:
+  a compromised origin means remote code execution, not just swapped
+  binaries. `version.json` itself is trust-on-first-use — there is no
+  out-of-band pin for it the way the landing page pins `installer.ps1`.
+- A compromised manifest host can replay an older but otherwise valid
+  manifest (downgrade): SHA pinning lives inside the manifest itself, so old
+  pins still verify. The installer warns when the remote manifest is older
+  than its embedded copy or the last-run state, but still honors it. Defense
+  in depth stays: HTTPS + installer/manifest version check, GitHub allow-list
+  for asset URLs, SHA-256 verification of every binary, and the embedded
+  offline fallback.
 
 ## Reporting a vulnerability
 

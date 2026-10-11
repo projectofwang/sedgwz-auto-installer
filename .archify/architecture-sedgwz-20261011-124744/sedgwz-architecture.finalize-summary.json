@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "A:\\PROJECTS\\sedgwz-auto-installer\\.archify\\architecture-sedgwz-20261011-124744\\candidate.json",
+    "sha256": "0547e3c9358977d618b5eb8bdd564e8c8cce6976cb08a7865b11d1fee5422a76",
+    "bytes": 4572
+  },
+  "artifact": {
+    "path": "A:\\PROJECTS\\sedgwz-auto-installer\\.archify\\architecture-sedgwz-20261011-124744\\sedgwz-architecture.html",
+    "sha256": "ec1583f924d126d561e901c0c69894db0f587e76e2ce97f5ad6d59d33c0b94b4",
+    "bytes": 770735
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "A:\\PROJECTS\\sedgwz-auto-installer\\.archify\\architecture-sedgwz-20261011-124744\\sedgwz-architecture.finalize.json",
+    "summaryReceipt": "A:\\PROJECTS\\sedgwz-auto-installer\\.archify\\architecture-sedgwz-20261011-124744\\sedgwz-architecture.finalize-summary.json",
+    "browserCheckReceipt": "A:\\PROJECTS\\sedgwz-auto-installer\\.archify\\architecture-sedgwz-20261011-124744\\sedgwz-architecture.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.0.1",
+    "availableVersion": "3.0.1",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-11T05:53:22.057Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 5024,
+  "visualReviewRecommendation": {
+    "action": "inspect-route-readability",
+    "signals": {
+      "resolvedCrossovers": 1,
+      "routesOverSuggestedBends": 1
+    },
+    "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+    "affectedRoutes": {
+      "crossings": [
+        {
+          "left": {
+            "id": "installer-zips",
+            "from": "installer",
+            "to": "upstream",
+            "label": "pinned zips",
+            "collectionIndex": 5,
+            "artifactIndex": 6
+          },
+          "right": {
+            "id": "maint-installer",
+            "from": "mainttool",
+            "to": "installer",
+            "label": "sync fallback",
+            "collectionIndex": 10,
+            "artifactIndex": 11
+          },
+          "point": [
+            539,
+            388
+          ],
+          "sharedNode": "installer"
+        }
+      ],
+      "detours": [
+        {
+          "relationship": {
+            "id": "maint-installer",
+            "from": "mainttool",
+            "to": "installer",
+            "label": "sync fallback",
+            "collectionIndex": 10,
+            "artifactIndex": 11
+          },
+          "bends": 4,
+          "stretch": 1.293
+        }
+      ],
+      "truncated": false
+    },
+    "hints": [
+      "installer → upstream and mainttool → installer cross next to installer: move node upstream or mainttool so the two reach installer from different sides (for example one level with it, one directly above or below it).",
+      "mainttool → installer needs 4 bends: move node mainttool or installer so they share a row or column with matching centers, or sit diagonally with a clear corner."
+    ],
+    "repair": "Trace these relationships at the desktop viewport. For Architecture, use references/architecture-layout-repair.md: reflow a blocked main path or tangled connected scene, and repair an isolated defect locally only when the surrounding composition is accepted. Preserve all semantic content and user-fixed geometry. Rerun finalize once after the edit."
+  }
+}
