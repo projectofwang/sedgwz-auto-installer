@@ -76,6 +76,9 @@ if ((-not [string]::IsNullOrWhiteSpace($env:SEDG_INSTALL_PATH)) -and ($AllowSeam
     Write-Warning 'SEDG_INSTALL_PATH test seam is active; install layout leaves the default.'
     $script:InstallPath = $env:SEDG_INSTALL_PATH
 } else {
+    # F2: the seam is locked when elevated unless -AllowSeam; say so when
+    # the env var is set but ignored so a dirty env never applies silently.
+    if (-not [string]::IsNullOrWhiteSpace($env:SEDG_INSTALL_PATH)) { Write-Warning 'SEDG_INSTALL_PATH is set but ignored; test seams require -AllowSeam when elevated.' }
     $script:InstallPath = 'C:\serverless-edge-dns-gateway'
 }
 $script:ObsoleteInstallPaths = @(
@@ -109,6 +112,9 @@ $script:manifestUrl = 'https://dl.taiyuanwangjie.dpdns.org/approved-releases.jso
 if ((-not [string]::IsNullOrWhiteSpace($env:SEDG_MANIFEST_URL)) -and ($AllowSeam -or (-not (Test-Administrator)))) {
     Write-Warning 'SEDG_MANIFEST_URL test seam is active; manifest source leaves the default.'
     $script:manifestUrl = $env:SEDG_MANIFEST_URL
+} else {
+    # F2: locked when elevated unless -AllowSeam; warn when ignored.
+    if (-not [string]::IsNullOrWhiteSpace($env:SEDG_MANIFEST_URL)) { Write-Warning 'SEDG_MANIFEST_URL is set but ignored; test seams require -AllowSeam when elevated.' }
 }
 $script:Sources = @{
     Manifest         = $script:manifestUrl
@@ -699,6 +705,8 @@ function Get-AssetDownloadBase {
         Write-Warning 'SEDG_ASSET_BASE_URL test seam is active; downloads leave the pinned origin.'
         return $base.TrimEnd('/')
     }
+    # F2: locked when elevated unless -AllowSeam; warn when ignored.
+    if (-not [string]::IsNullOrWhiteSpace($base)) { Write-Warning 'SEDG_ASSET_BASE_URL is set but ignored; test seams require -AllowSeam when elevated.' }
     return 'https://github.com'
 }
 
@@ -954,6 +962,19 @@ function Expand-Zip([string]$ZipFile, [string]$Destination) {
     }
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
     Expand-Archive -LiteralPath $ZipFile -DestinationPath $Destination -Force
+    # F11: ZipSlip guard (hash pinning stays the real gate). Every expanded
+    # entry must resolve under $Destination; absolute paths and `..`
+    # escapes abort instead of writing outside the staging dir.
+    # NOTE: base comes from Get-Item (same provider form as the entries
+    # below); Resolve-Path can return 8.3 short names and break the compare.
+    $destFull = (Get-Item -LiteralPath $Destination).FullName
+    $prefix = $destFull.TrimEnd('\') + '\'
+    foreach ($entry in @(Get-ChildItem -LiteralPath $Destination -Recurse -Force -ErrorAction Stop)) {
+        $p = $entry.FullName
+        if (($p -ne $destFull) -and (-not $p.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase))) {
+            throw ("Archive entry escaped the destination directory: {0}" -f $entry.Name)
+        }
+    }
 }
 
 function Find-File([string]$Root, [string]$Name) {
@@ -1120,6 +1141,19 @@ function Schedule-DeleteTreeOnReboot([string]$Path) {
         }
     } catch { Write-Warning ('SEDG:Schedule-DeleteTreeOnReboot: $entries = @(Get-ChildItem -LiteralPath $Path -Recurse -Forc... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     try { Schedule-DeleteOnReboot $Path } catch { Write-Warning ('SEDG:Schedule-DeleteTreeOnReboot: Schedule-DeleteOnReboot $Path (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+}
+
+function Test-PendingRebootDelete([string]$Path) {
+    # F4: a previous Uninstall may have scheduled the install tree for
+    # reboot deletion via MoveFileEx. Installing now would be wiped by
+    # that reboot, so detect it and abort instead.
+    try {
+        $key = Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name PendingFileRenameOperations -ErrorAction Stop
+        foreach ($op in @($key.PendingFileRenameOperations)) {
+            if (([string]$op).IndexOf([string]$Path, [StringComparison]::OrdinalIgnoreCase) -ge 0) { return $true }
+        }
+    } catch { Write-Verbose $_ }
+    return $false
 }
 
 function Start-AllServices {
@@ -2009,6 +2043,15 @@ function Get-ConfiguredUpstream {
     return $script:OptionalUpstreams['SDEG (Default)']
 }
 
+function Get-RedactedUrl([string]$Url) {
+    # F10: strip the query string (?token=...) before any console/transcript
+    # log or state file. The full URL lives only in config.yaml, never in
+    # output. Scheme + host + path stay so the value remains parseable.
+    $redacted = '[redacted]'
+    try { $u = [uri]$Url; $redacted = ($u.Scheme + '://' + $u.Host + $u.AbsolutePath) } catch { Write-Verbose $_ }
+    return $redacted
+}
+
 function Test-DnsUpstream([string]$Upstream) {
     if ([string]::IsNullOrWhiteSpace($Upstream)) { return $false }
     if ($Upstream -match '[\r\n]') { return $false }
@@ -2102,7 +2145,7 @@ function Repair-CacheKey {
     } catch { Write-Warning ('SEDG:Repair-CacheKey: $raw = Get-Content -LiteralPath $script:ConfigFile -Raw -Err... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
 }
 function Set-UpstreamInConfig([string]$Upstream) {
-    if (-not (Test-DnsUpstream $Upstream)) { throw "Unsupported DNS Upstream: $Upstream" }
+    if (-not (Test-DnsUpstream $Upstream)) { throw 'Unsupported DNS Upstream.' }
     Ensure-Config
     $content = Get-Content -LiteralPath $script:ConfigFile -Raw -ErrorAction Stop
     $newline = if ($content.Contains("`r`n")) { "`r`n" } else { "`n" }
@@ -2119,7 +2162,7 @@ function Set-UpstreamInConfig([string]$Upstream) {
         $evict = @($list | Where-Object { $defaults -notcontains $_ }) | Select-Object -Last 1
         if (-not $evict) { break }
         $list = @($list | Where-Object { $_ -ne $evict })
-        Write-Warning (('Upstream list exceeds 8 entries; removed oldest custom entry: {0}' -f $evict))
+        Write-Warning (('Upstream list exceeds 8 entries; removed oldest custom entry: {0}' -f (Get-RedactedUrl $evict)))
     }
     $replacement = ("upstream:`n" + (($list | ForEach-Object { "  - $_" }) -join "`n") + "`n")
     if ([string]$block.Style -eq 'flow') {
@@ -2143,7 +2186,7 @@ function Set-UpstreamInConfig([string]$Upstream) {
     }
     if ($newline -eq "`r`n") { $updated = $updated -replace "`n", "`r`n" }
     Set-Content -LiteralPath $script:ConfigFile -Value $updated -Encoding UTF8 -NoNewline
-    Write-Done (((T 'DoneUpstreamChanged') -f $Upstream))
+    Write-Done (((T 'DoneUpstreamChanged') -f (Get-RedactedUrl $Upstream)))
 }
 function Set-SystemDns {
     Ensure-Administrator
@@ -2901,11 +2944,13 @@ function Write-State([string]$DnsProxyRelease, [string]$ZapretRelease, [string]$
         InstallerVersion  = $script:InstallerVersion
         DnsProxyRelease   = if ($DnsProxyRelease) { $DnsProxyRelease } else { 'Unknown' }
         ZapretRelease     = if ($ZapretRelease) { $ZapretRelease } else { 'Unknown' }
-        Upstream          = $Upstream
+        Upstream          = (Get-RedactedUrl $Upstream)
         Updated           = (Get-Date).ToUniversalTime().ToString('o')
     }
     # Additive: old readers ignore unknown fields; omit when empty.
-    if (@($UpstreamList).Count -gt 0) { $state['upstream_list'] = @($UpstreamList) }
+    # F10: state keeps the redacted upstream only; the full URL (with any
+    # ?token=) lives in config.yaml alone.
+    if (@($UpstreamList).Count -gt 0) { $state['upstream_list'] = @(@($UpstreamList) | ForEach-Object { Get-RedactedUrl ([string]$_) }) }
 
     $json = $state | ConvertTo-Json -Depth 3
     $json | Set-Content -LiteralPath $script:StateFile -Encoding UTF8
@@ -3019,6 +3064,11 @@ function Install-All {
     param([switch]$Clean, [switch]$DnsOnly, [switch]$FailClosed, [switch]$AllowSeam)
     Ensure-Administrator
     Test-Platform
+    # F4: refuse to install over a tree that a pending reboot will delete
+    # (scheduled by a previous Uninstall via MoveFileEx).
+    if (Test-PendingRebootDelete $script:InstallPath) {
+        throw 'A previous Uninstall scheduled the install directory for deletion at reboot. Reboot Windows first, then retry Install.'
+    }
     Enter-InstallerMutex
     Start-OpTranscript 'Install'
     try {
