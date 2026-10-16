@@ -20,6 +20,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            cloudflare/package-lock.json
+
       - name: Parse all PowerShell files (Windows PowerShell 5.1)
         shell: powershell
         run: |
@@ -119,6 +127,10 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            cloudflare/package-lock.json
 
       - name: Install dependencies (root + worker package)
         shell: powershell
@@ -132,5 +144,4 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm run build:cf
           npm run deploy:cf:dry

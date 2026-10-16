@@ -26,6 +26,8 @@ node -e "for (const f of ['cloudflare/public/installer.ps1','cloudflare/public/a
 # Static headers: assets-only deploy, so no-store/security headers must
 # come from a _headers file instead of a Worker.
 cat > cloudflare/public/_headers <<'HEADERS_EOF'
+# NOTE: only one rule block supplies a given header for a given path, so
+# Cache-Control: no-store is repeated on every no-store path.
 /*
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
@@ -47,6 +49,13 @@ cat > cloudflare/public/_headers <<'HEADERS_EOF'
   Cache-Control: no-store
   Content-Type: text/plain; charset=utf-8
 HEADERS_EOF
+
+# Content check: every mascots/*.webp referenced by landing.html must exist
+# in the staged output, and _headers must carry no-store.
+for f in $(grep -o 'mascots/[A-Za-z0-9_.-]*\.webp' cloudflare/landing.html | sort -u); do
+  [[ -f "cloudflare/public/$f" ]] || { echo "ERROR: missing staged asset: $f" >&2; exit 1; }
+done
+grep -q 'Cache-Control: no-store' cloudflare/public/_headers || { echo "ERROR: _headers missing Cache-Control: no-store" >&2; exit 1; }
 
 installer_version="$(sed -n "s/^\$script:InstallerVersion = '\([^']*\)'.*/\1/p" installer.ps1 | head -n1)"
 # Parse JSON with node (always present where wrangler runs); a naive

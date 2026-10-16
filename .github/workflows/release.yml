@@ -33,12 +33,52 @@ jobs:
           set -euo pipefail
           bash cloudflare/build.sh
 
-      - name: Publish GitHub Release (second origin for hash cross-check)
+      - name: Gate — installer.ps1 must stay pure ASCII
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          $tag = '${{ inputs.tag }}'
-          if ([string]::IsNullOrWhiteSpace($tag)) { $tag = '${{ github.ref_name }}' }
+          $n = ([regex]::Matches((Get-Content -LiteralPath installer.ps1 -Raw), '[^\x00-\x7F]')).Count
+          if ($n -ne 0) { throw "installer.ps1 has $n non-ASCII chars" }
+
+      - name: Gate — Pester logic tests (Pester 5+)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version -ge [version]'5.2.0' })) {
+            Install-Module Pester -MinimumVersion 5.2.0 -Force -Scope CurrentUser -SkipPublisherCheck -ErrorAction Stop
+          }
+          Import-Module Pester -MinimumVersion 5.2.0 -Force -ErrorAction Stop
+          Invoke-Pester -Path ./tests -Output Detailed -CI
+
+      - name: Gate — manifest schema + version parity + embedded parity
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $m = Get-Content -LiteralPath approved-releases.json -Raw | ConvertFrom-Json
+          if ($m.schema -ne 1 -or $m.policy -ne 'approved-only') { throw 'bad schema/policy' }
+          foreach ($c in @($m.components.dnsproxy, $m.components.zapret)) {
+            if ([string]::IsNullOrWhiteSpace($c.tag) -or [string]::IsNullOrWhiteSpace($c.asset) -or $c.sha256 -notmatch '^[0-9a-f]{64}$') { throw 'bad component entry' }
+          }
+          if ($m.components.nssm.sha256 -notmatch '^[0-9a-f]{64}$') { throw 'bad nssm entry' }
+          if ([string]$m.components.nssm.url -notmatch '^https://') { throw 'nssm url must be https' }
+          $line = (Select-String -LiteralPath installer.ps1 -Pattern "InstallerVersion = '" | Select-Object -First 1).Line
+          $iv = ($line -replace "^.*'([^']+)'.*", '$1').Trim()
+          if ($iv -ne [string]$m.installer.version) { throw "version mismatch: $iv vs $($m.installer.version)" }
+          $src = Get-Content -LiteralPath installer.ps1 -Raw
+          foreach ($tag in @($m.components.dnsproxy.tag, $m.components.zapret.tag)) {
+            if ($src -notmatch [regex]::Escape([string]$tag)) { throw "embedded manifest missing tag $tag" }
+          }
+          foreach ($h in @($m.components.dnsproxy.sha256, $m.components.zapret.sha256, $m.components.nssm.sha256)) {
+            if ($src -notmatch [regex]::Escape([string]$h)) { throw "embedded manifest missing hash $h" }
+          }
+
+      - name: Publish GitHub Release (second origin for hash cross-check)
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:TAG
           if ($tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw "ref '$tag' is not a version tag (expected vX.Y.Z)" }
           $ver = (Get-Content -LiteralPath cloudflare/public/version.json -Raw | ConvertFrom-Json).version
           if ("v$ver" -ne $tag) { throw "tag $tag does not match installer version v$ver" }
@@ -62,11 +102,12 @@ jobs:
           else { gh release create $tag --title $tag --generate-notes --latest $assets }
 
       - name: Verify published assets (re-download, re-hash against SHA256SUMS)
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          $tag = '${{ inputs.tag }}'
-          if ([string]::IsNullOrWhiteSpace($tag)) { $tag = '${{ github.ref_name }}' }
+          $tag = $env:TAG
           $tmp = Join-Path $env:RUNNER_TEMP ('release-verify-' + [guid]::NewGuid().ToString('N'))
           New-Item -ItemType Directory -Path $tmp -Force | Out-Null
           gh release download $tag --dir $tmp --clobber

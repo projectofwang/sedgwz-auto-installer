@@ -541,6 +541,7 @@ function Ensure-Administrator {
     if ($DnsOnly) { $elevArgs += '-DnsOnly' }
     if ($Purge) { $elevArgs += '-Purge' }
     if ($FailClosed) { $elevArgs += '-FailClosed' }
+    if ($AllowDowngrade) { $elevArgs += '-AllowDowngrade' }
     if ($AllowSeam) { $elevArgs += '-AllowSeam' }
     if ($script:Lang -in @('EN','VI')) { $elevArgs += @('-Language', $script:Lang) }
     Start-Process powershell.exe -Verb RunAs -ArgumentList $elevArgs
@@ -769,15 +770,39 @@ function Get-ApprovedManifest {
     if ($fromRemote -and ($remoteUri -eq [string]$script:Sources.Manifest) -and (-not [string]::IsNullOrWhiteSpace([string]$script:Sources.ManifestFallback))) {
         try {
             $xb = (Invoke-WebRequest -Uri ([string]$script:Sources.ManifestFallback) -Headers @{ 'User-Agent' = 'Serverless-Edge-DNS-Gateway-Installer' } -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop).Content | ConvertFrom-Json
+            $mc = Get-ManifestProperty $m 'components'
+            $xc = Get-ManifestProperty $xb 'components'
+            $mn = Get-ManifestProperty $mc 'nssm'
+            $xn = Get-ManifestProperty $xc 'nssm'
             foreach ($field in @(@{ P = 'installer.version'; A = $m.installer.version; B = $xb.installer.version },
                     @{ P = 'dnsproxy'; A = ($m.components.dnsproxy.tag, $m.components.dnsproxy.sha256 -join '|'); B = ($xb.components.dnsproxy.tag, $xb.components.dnsproxy.sha256 -join '|') },
-                    @{ P = 'zapret'; A = ($m.components.zapret.tag, $m.components.zapret.sha256 -join '|'); B = ($xb.components.zapret.tag, $xb.components.zapret.sha256 -join '|') })) {
+                    @{ P = 'zapret'; A = ($m.components.zapret.tag, $m.components.zapret.sha256 -join '|'); B = ($xb.components.zapret.tag, $xb.components.zapret.sha256 -join '|') },
+                    @{ P = 'nssm'; A = ((Get-ManifestString $mn 'url'), (Get-ManifestString $mn 'sha256') -join '|'); B = ((Get-ManifestString $xn 'url'), (Get-ManifestString $xn 'sha256') -join '|') })) {
                 if ([string]$field.A -ne [string]$field.B) {
                     throw ("Manifest cross-check mismatch on {0}: primary {1} vs GitHub fallback. Refusing to continue." -f $field.P, $remoteUri)
                 }
             }
         } catch {
             if ($_.Exception.Message -match 'cross-check mismatch') { throw }
+            try {
+                # Fallback unreachable: compare the pinned subset against the
+                # in-memory embedded manifest instead of failing open.
+                $memA = @((Get-ManifestString (Get-ManifestProperty $m 'installer') 'version'))
+                $memB = @((Get-ManifestString (Get-ManifestProperty $embedded 'installer') 'version'))
+                foreach ($cn in @('dnsproxy', 'zapret')) {
+                    $ca = Get-ManifestProperty (Get-ManifestProperty $m 'components') $cn
+                    $cb = Get-ManifestProperty (Get-ManifestProperty $embedded 'components') $cn
+                    $memA += ((Get-ManifestString $ca 'tag'), (Get-ManifestString $ca 'sha256') -join '|')
+                    $memB += ((Get-ManifestString $cb 'tag'), (Get-ManifestString $cb 'sha256') -join '|')
+                }
+                $na = Get-ManifestProperty (Get-ManifestProperty $m 'components') 'nssm'
+                $nb = Get-ManifestProperty (Get-ManifestProperty $embedded 'components') 'nssm'
+                $memA += ((Get-ManifestString $na 'url'), (Get-ManifestString $na 'sha256') -join '|')
+                $memB += ((Get-ManifestString $nb 'url'), (Get-ManifestString $nb 'sha256') -join '|')
+                if (($memA -join "`n") -ne ($memB -join "`n")) { throw 'Manifest pinned subset mismatch with embedded manifest while fallback is unreachable. Refusing to continue.' }
+            } catch {
+                if ($_.Exception.Message -match 'pinned subset mismatch') { throw }
+            }
             Write-Warning ("Manifest cross-check skipped (fallback unreachable): {0}" -f $_.Exception.Message)
         }
     }
@@ -1161,21 +1186,6 @@ function Start-AllServices {
     }
 }
 
-function Set-AdapterDns([string]$AdapterName, [ValidateSet('Family','Static','Both')][string]$Mode = 'Both', [ValidateSet('IPv4','IPv6')][string]$AddressFamily = 'IPv4', [string[]]$ServerAddresses = @(), [string[]]$V4 = @(), [string[]]$V6 = @(), [switch]$Dhcp) {
-    # Single setter behind the three historical wrappers: Family (one family
-    # static/DHCP), Static (both families static in one CIM call), Both
-    # (empty family means DHCP). CIM-then-netsh fallback and validation live
-    # in the wrappers below; this dispatcher only routes.
-    switch ($Mode) {
-        'Family' {
-            if ($Dhcp) { Set-AdapterDnsFamily $AdapterName $AddressFamily -Dhcp }
-            else { Set-AdapterDnsFamily $AdapterName $AddressFamily -ServerAddresses $ServerAddresses }
-        }
-        'Static' { Set-AdapterDnsStatic $AdapterName $V4 $V6 }
-        default { Set-AdapterDnsBoth $AdapterName $V4 $V6 }
-    }
-}
-
 function Set-AdapterDnsFamily([string]$AdapterName, [ValidateSet('IPv4','IPv6')][string]$AddressFamily, [string[]]$ServerAddresses, [switch]$Dhcp) {
     # Set-DnsClientServerAddress has no AddressFamily switch: pass only the
     # requested family's addresses for static DNS; use per-protocol netsh
@@ -1414,10 +1424,6 @@ function Backup-DnsSettings {
         $json = $payload | ConvertTo-Json -Depth 5
         $localAddrs = @($snapshot | ForEach-Object { @($_.V4Addresses) + @($_.V6Addresses) })
         $tainted = [bool]@($localAddrs | Where-Object { $script:BootstrapTainted -contains $_ }).Count
-        try {
-            New-Item -ItemType Directory -Path $script:TempPath -Force | Out-Null
-            $json | Set-Content -LiteralPath (Join-Path $script:TempPath 'dns-backup.json') -Encoding UTF8
-        } catch { Write-Warning ('SEDG:Backup-DnsSettings: New-Item -ItemType Directory -Path $script:TempPath -Force |... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         try {
             Set-SecureAcl $script:DnsBackupDir
             if (-not $tainted) {
@@ -2115,14 +2121,14 @@ function Set-UpstreamInConfig([string]$Upstream) {
         $list = @($list | Where-Object { $_ -ne $evict })
         Write-Warning (('Upstream list exceeds 8 entries; removed oldest custom entry: {0}' -f $evict))
     }
-    $replacement = ("upstream:`n" + (($list | ForEach-Object { "  - $_" }) -join "`n") + "`n").Replace('$', '$$')
+    $replacement = ("upstream:`n" + (($list | ForEach-Object { "  - $_" }) -join "`n") + "`n")
     if ([string]$block.Style -eq 'flow') {
         # Flow-style single line: replace the whole line, still emit block-style.
         $flowPattern = '(?m)^upstream:\s*\[.*\]'
-        $updated = ([regex]$flowPattern).Replace($normalized, $replacement, 1)
+        $updated = ([regex]$flowPattern).Replace($normalized, $replacement.Replace('$', '$$'), 1)
     } else {
         $pattern = '(?ms)^upstream:\s*\n(?:^[ \t]*-[^\r\n]*\n?)+'
-        $updated = ([regex]$pattern).Replace($normalized, $replacement, 1)
+        $updated = ([regex]$pattern).Replace($normalized, $replacement.Replace('$', '$$'), 1)
         if ($updated -eq $normalized) {
             # Comment-first layouts (a `#` line right after `upstream:`) do
             # not match the dash-run pattern: splice by the parsed span.
@@ -2142,7 +2148,8 @@ function Set-UpstreamInConfig([string]$Upstream) {
 function Set-SystemDns {
     Ensure-Administrator
     Test-Platform
-
+    Enter-InstallerMutex
+    try {
     Write-Title (T 'DnsTitle')
     Write-Host ('  ' + (T 'DnsIntro1'))
     Write-Host ('  ' + (T 'DnsIntro2'))
@@ -2235,6 +2242,9 @@ function Set-SystemDns {
     } else {
         Write-Done (T 'DnsDoneDhcp')
     }
+    } finally {
+        try { Exit-InstallerMutex } catch { Write-Warning ('SEDG:Set-SystemDns: Exit-InstallerMutex (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+    }
 }
 
 function Get-StateReleases {
@@ -2261,6 +2271,8 @@ function Restart-DnsProxyService([string]$FailMessage) {
 function Set-Upstream([string]$SelectedUpstream = $null) {
     Ensure-Administrator
     Test-Platform
+    Enter-InstallerMutex
+    try {
     if (-not (Test-Path $script:InstallPath)) { throw (T 'NotFound') }
     $resetDefaults = $false
 
@@ -2310,6 +2322,9 @@ function Set-Upstream([string]$SelectedUpstream = $null) {
     $upLog = '[redacted]'
     try { $upUri = [uri]$SelectedUpstream; $upLog = ($upUri.Host + $upUri.AbsolutePath) } catch { Write-Verbose $_ }
     Write-Host ((T 'UpChanged') + $upLog) -ForegroundColor Green
+    } finally {
+        try { Exit-InstallerMutex } catch { Write-Warning ('SEDG:Set-Upstream: Exit-InstallerMutex (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+    }
 }
 
 function Set-Language([string]$SelectedLang = $null) {
@@ -2473,7 +2488,7 @@ $WatchdogMutex = $null
 $WatchdogAcquired = $true
 try {
     $WatchdogMutex = New-Object System.Threading.Mutex($false, 'Global\SEDG-Installer')
-    try { $WatchdogAcquired = $WatchdogMutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $WatchdogAcquired = $true }
+    try { $WatchdogAcquired = $WatchdogMutex.WaitOne(30000) } catch [System.Threading.AbandonedMutexException] { $WatchdogAcquired = $true }
 } catch { $WatchdogAcquired = $true }
 if (-not $WatchdogAcquired) { exit 0 }
 
@@ -2868,7 +2883,7 @@ function Test-DnsProxyListeners {
             $requiresV6 = $false
             try {
                 if (Test-Path -LiteralPath $script:ConfigFile -PathType Leaf) {
-                    $requiresV6 = [bool]((Get-Content -LiteralPath $script:ConfigFile -Raw -ErrorAction Stop) -match '::1')
+                    $requiresV6 = [bool]((Get-Content -LiteralPath $script:ConfigFile -Raw -ErrorAction Stop) -match '(?m)^\s*-\s*::1\s*$')
                 }
             } catch { Write-Verbose $_ }
             if ($requiresV6) { throw 'DNSProxy is not listening on ::1:53 but the config requires it.' }
@@ -3235,10 +3250,10 @@ function Update-All {
     }
 
     Write-Step 'Stopping services before update...'
-    Stop-AllServices
-    Set-SecureAcl $script:InstallPath
 
     try {
+        Stop-AllServices
+        Set-SecureAcl $script:InstallPath
         Reset-DnsToDhcp
         if ($skipCommit) {
             Write-Step (T 'UpdSkipped')
@@ -3289,6 +3304,8 @@ function Update-All {
 
 function Pause-All {
     Ensure-Administrator
+    Enter-InstallerMutex
+    try {
     Write-CreditBanner
     Write-Title ('Serverless Edge DNS Gateway with Zapret DPI Bypass - Auto Installer - ' + (T 'MiPause'))
     if (-not (Test-Path $script:InstallPath)) { throw (T 'NotFound') }
@@ -3299,11 +3316,16 @@ function Pause-All {
     Write-Host (T 'PauseDone') -ForegroundColor Green
     Write-Host (('  ' + (T 'StLocation') + ': {0}') -f $script:InstallPath) -ForegroundColor DarkGray
     Write-Host ('  ' + (T 'PauseKept')) -ForegroundColor DarkGray
+    } finally {
+        try { Exit-InstallerMutex } catch { Write-Warning ('SEDG:Pause-All: Exit-InstallerMutex (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+    }
 }
 
 function Resume-All {
     Ensure-Administrator
     Test-Platform
+    Enter-InstallerMutex
+    try {
     Write-CreditBanner
     Write-Title ('Serverless Edge DNS Gateway with Zapret DPI Bypass - Auto Installer - ' + (T 'MiResume'))
     if (-not (Test-Path $script:InstallPath)) { throw (T 'NotFound') }
@@ -3321,11 +3343,16 @@ function Resume-All {
     Write-Host (T 'ResumeDone') -ForegroundColor Green
     Write-Host '  DNS: 127.0.0.1:53' -ForegroundColor DarkGray
     Show-ServiceTests
+    } finally {
+        try { Exit-InstallerMutex } catch { Write-Warning ('SEDG:Resume-All: Exit-InstallerMutex (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+    }
 }
 
 function Restart-All {
     Ensure-Administrator
     Test-Platform
+    Enter-InstallerMutex
+    try {
     Write-CreditBanner
     Write-Title ('Serverless Edge DNS Gateway with Zapret DPI Bypass - Auto Installer - ' + (T 'MiRestart'))
     if (-not (Test-Path $script:InstallPath)) { throw (T 'NotFound') }
@@ -3342,6 +3369,9 @@ function Restart-All {
     }
     Write-Host (T 'RestartDone') -ForegroundColor Green
     Show-ServiceTests
+    } finally {
+        try { Exit-InstallerMutex } catch { Write-Warning ('SEDG:Restart-All: Exit-InstallerMutex (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+    }
 }
 function Uninstall-All {
     Ensure-Administrator
@@ -3455,7 +3485,7 @@ function Show-Status {
     $needsV6 = $false
     try {
         if (Test-Path -LiteralPath $script:ConfigFile -PathType Leaf) {
-            $needsV6 = [bool]((Get-Content -LiteralPath $script:ConfigFile -Raw -ErrorAction Stop) -match '::1')
+            $needsV6 = [bool]((Get-Content -LiteralPath $script:ConfigFile -Raw -ErrorAction Stop) -match '(?m)^\s*-\s*::1\s*$')
         }
     } catch { Write-Verbose $_ }
 

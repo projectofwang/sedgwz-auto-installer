@@ -33,6 +33,17 @@ sign-in). The `cf` beta cannot spawn its Wrangler delegate on Windows
 When upstream `cf` fixes the Windows spawn, replace the delegate call
 with plain `cf build`.
 
+Smoke (after deploy, 3 lines — version.json commit must equal HEAD):
+
+```sh
+BASE=https://dl.taiyuanwangjie.dpdns.org
+[ "$(curl -fsSL "$BASE/version.json" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).commit")" = "$(git rev-parse HEAD)" ] && echo "smoke OK"
+```
+
+Wrangler fallback (`npm run deploy`, `wrangler.toml`) targets Wrangler 4.x
+(pinned in `cloudflare/package.json`); the fallback path is kept for
+emergencies and is not regularly tested — prefer `npm run deploy:cf`.
+
 ## Files
 
 `/` (landing page with install command, from `landing.html`) -
