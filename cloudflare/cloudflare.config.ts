@@ -7,6 +7,9 @@ export default defineConfig({
 	worker: {
 		name: "sedg-with-zapret-dpi-bypass-auto-installer",
 		compatibilityDate: "2026-09-27",
+		// Parity with wrangler.toml `workers_dev = false`: custom domain only,
+		// no default *.workers.dev route.
+		workersDev: false,
 		triggers: [
 			triggers.fetch({
 				pattern: "dl.taiyuanwangjie.dpdns.org/*",

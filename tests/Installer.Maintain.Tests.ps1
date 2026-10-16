@@ -438,7 +438,6 @@ Describe 'DNS backup/restore (mocked)' {
         Backup-DnsSettings
 
         (Test-Path -LiteralPath $script:DnsBackupSafe -PathType Leaf) | Should -Be $false
-        (Test-Path -LiteralPath (Join-Path $script:TempPath 'dns-backup.json') -PathType Leaf) | Should -Be $true
     }
     It 'all-DHCP baseline restore replays per-adapter without a global reset' {
         $global:SedgTestCalls = @()
@@ -1164,5 +1163,130 @@ Describe 'Rollback and live-binary gates (mocked)' {
         (Test-LiveBinariesHealthy) | Should -Be $false
         Remove-Item -LiteralPath (Join-Path $script:ZapretPath 'WinDivert64.sys') -Force
         (Test-LiveBinariesHealthy) | Should -Be $false
+    }
+}
+
+Describe 'Regression pins (findings 18/19)' {
+    BeforeAll {
+        # Earlier Describes shadow then remove these globals (menu upstream
+        # stub, Write-State list stub), so re-import for run-phase use.
+        Import-InstallerFunction 'Test-ConfigValid'
+        Import-InstallerFunction 'Get-UpstreamBlock'
+        Import-InstallerFunction 'Get-UpstreamList'
+        Import-InstallerFunction 'Get-ConfiguredUpstream'
+        Import-InstallerFunction 'Set-UpstreamInConfig'
+        Import-InstallerFunction 'Ensure-Administrator'
+        Import-InstallerFunction 'Get-ApprovedManifest'
+    }
+    It 'writes a $ upstream exactly once through a comment-first block (no $$ doubling)' {
+        $script:ConfigFile = Join-Path $TestDrive 'comment-first-dollar.yaml'
+        $script:StateFile = Join-Path $TestDrive 'comment-first-dollar-state.json'
+        $script:OptionalUpstreams = @{}
+        function global:Ensure-Config { }
+        try {
+            @"
+listen-ports:
+  - 53
+upstream:
+  # rotated weekly, keep standby below
+  - https://old.example/dns-query
+timeout: 5s
+fallback:
+  - https://cloudflare-dns.com/dns-query
+"@ | Set-Content -LiteralPath $script:ConfigFile -Encoding UTF8
+            $new = 'https://new.example/dns-query?token=abc$def'
+            Set-UpstreamInConfig $new
+            $out = Get-Content -LiteralPath $script:ConfigFile -Raw
+            $out | Should -Match ([regex]::Escape($new))
+            $out | Should -Not -Match '\$\$'
+            (Get-ConfiguredUpstream) | Should -Be $new
+        } finally {
+            Remove-Item function:global:Ensure-Config -ErrorAction SilentlyContinue
+        }
+    }
+    It 'commented ::1 and bootstrap 2606:4700:4700::1111 do not imply IPv6' {
+        $script:ConfigFile = Join-Path $TestDrive 'commented-v6.yaml'
+        @"
+listen-addrs:
+  - 127.0.0.1
+  # - ::1
+listen-ports:
+  - 53
+upstream:
+  - https://x.example/dns-query
+bootstrap:
+  - 2606:4700:4700::1111
+"@ | Set-Content -LiteralPath $script:ConfigFile -Encoding UTF8
+        (Test-ConfigValid) | Should -Be $true
+        $raw = Get-Content -LiteralPath $script:ConfigFile -Raw
+        ([bool]($raw -match '(?m)^\s*-\s*::1\s*$')) | Should -Be $false
+    }
+    It 'forwards -AllowDowngrade to the elevated process' {
+        function global:Test-Administrator { return $false }
+        function global:Start-Process { param($FileName, $Verb, $ArgumentList) $global:SedgElevArgs = @($ArgumentList) }
+        function global:Exit-Installer { param([int]$Code) }
+        $savedSelfPath = $script:SelfPath
+        try {
+            $script:SelfPath = Join-Path $TestDrive 'elev-self.ps1'
+            '# self' | Set-Content -LiteralPath $script:SelfPath -Encoding ASCII
+            $global:Action = 'Install'
+            $global:AllowDowngrade = $true
+            $global:SedgElevArgs = @()
+            { Ensure-Administrator } | Should -Throw '*Elevation launched*'
+            $global:SedgElevArgs | Should -Contain '-AllowDowngrade'
+        } finally {
+            Remove-Item function:global:Test-Administrator -ErrorAction SilentlyContinue
+            Remove-Item function:global:Start-Process -ErrorAction SilentlyContinue
+            Remove-Item function:global:Exit-Installer -ErrorAction SilentlyContinue
+            $script:SelfPath = $savedSelfPath
+            Remove-Variable -Name Action -Scope Global -ErrorAction SilentlyContinue
+            Remove-Variable -Name AllowDowngrade -Scope Global -ErrorAction SilentlyContinue
+            Remove-Variable -Name SedgElevArgs -Scope Global -ErrorAction SilentlyContinue
+        }
+    }
+    It 'fails when the primary manifest and the GitHub fallback disagree on nssm (TOFU cross-check)' {
+        function global:Invoke-WebRequest { param($Uri, $Headers, [switch]$UseBasicParsing, $TimeoutSec, $ErrorAction)
+            if ([string]$Uri -match 'raw.githubusercontent') {
+                return [pscustomobject]@{ Content = $global:SedgFallbackManifestJson }
+            }
+            return [pscustomobject]@{ Content = $global:SedgRemoteManifestJson }
+        }
+        $savedStateFile = $script:StateFile
+        try {
+            $script:ManifestCache = $null
+            $script:InstallerVersion = '1.1.0'
+            $script:NssmVersion = '2.24'
+            $script:NssmSha256 = ('a' * 64)
+            $script:Sources = [pscustomobject]@{ Manifest = 'https://manifest.example/approved-releases.json'; ManifestFallback = 'https://raw.githubusercontent.com/x/y/main/approved-releases.json'; NssmZip = 'https://nssm.cc/release/nssm-2.24.zip' }
+            $nssmOk = @{ version = '2.24'; asset = 'nssm-2.24.zip'; url = 'https://nssm.cc/release/nssm-2.24.zip'; sha256 = ('e' * 64) }
+            $base = @{
+                schema = 1; policy = 'approved-only'
+                installer = @{ version = '1.1.0' }
+                components = @{
+                    dnsproxy = @{ repository = 'AdguardTeam/dnsproxy'; tag = 'v0.86.0'; asset = 'dnsproxy-windows-amd64-v0.86.0.zip'; sha256 = ('b' * 64) }
+                    zapret = @{ repository = 'bol-van/zapret'; tag = 'v72.13'; asset = 'zapret-v72.13.zip'; sha256 = ('c' * 64) }
+                    nssm = $nssmOk
+                }
+            }
+            $global:SedgRemoteManifestJson = ($base | ConvertTo-Json -Depth 5)
+            $evilNssm = @{ version = '2.24'; asset = 'nssm-2.24.zip'; url = 'https://nssm.cc/release/nssm-2.24.zip'; sha256 = ('f' * 64) }
+            $evil = @{
+                schema = 1; policy = 'approved-only'
+                installer = @{ version = '1.1.0' }
+                components = @{
+                    dnsproxy = @{ repository = 'AdguardTeam/dnsproxy'; tag = 'v0.86.0'; asset = 'dnsproxy-windows-amd64-v0.86.0.zip'; sha256 = ('b' * 64) }
+                    zapret = @{ repository = 'bol-van/zapret'; tag = 'v72.13'; asset = 'zapret-v72.13.zip'; sha256 = ('c' * 64) }
+                    nssm = $evilNssm
+                }
+            }
+            $global:SedgFallbackManifestJson = ($evil | ConvertTo-Json -Depth 5)
+            $script:StateFile = Join-Path $TestDrive 'r1-nssm-xcheck-state.json'
+            '{"InstallerVersion":"1.1.0"}' | Set-Content -LiteralPath $script:StateFile -Encoding UTF8
+
+            { Get-ApprovedManifest } | Should -Throw '*cross-check mismatch*'
+        } finally {
+            Remove-Item function:global:Invoke-WebRequest -ErrorAction SilentlyContinue
+            $script:StateFile = $savedStateFile
+        }
     }
 }

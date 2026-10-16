@@ -5,9 +5,10 @@ name: component-watch
 # has a new tag. A human must review and merge; merging to main deploys.
 #
 # M9: the branch is pushed and the PR is opened with COMPONENT_WATCH_TOKEN
-# (a classic PAT with repo+workflow scopes stored as a repo secret), so CI
-# triggers on the bot PR like on any human PR. Falls back to GITHUB_TOKEN
-# when the secret is missing (then CI must be triggered manually).
+# (a fine-grained PAT with contents:write + pull-requests:write only, no
+# workflow scope, stored as a repo secret), so CI triggers on the bot PR
+# like on any human PR. Falls back to GITHUB_TOKEN when the secret is
+# missing (then CI must be triggered manually).
 on:
   schedule:
     - cron: '0 2 * * 1'
@@ -97,7 +98,7 @@ jobs:
           Write-Host "bumped installer to $new"
           git add -A
           git commit -m ("chore: update components dnsproxy $env:LATEST_DNS, zapret $env:LATEST_ZAP (installer $new)") | Out-Null
-          git push -f origin $env:WATCH_BRANCH
+          git push --force-with-lease origin $env:WATCH_BRANCH
 
       - name: Open or update PR
         if: steps.diff.outputs.needed == 'true'
