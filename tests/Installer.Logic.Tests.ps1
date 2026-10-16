@@ -388,9 +388,9 @@ Describe 'Asset download seam' {
         $env:SEDG_ASSET_BASE_URL = 'http://127.0.0.1:18081'
         try {
             (Get-AssetDownloadBase) | Should -Be 'https://github.com'
-            Should -Invoke Write-Warning -Times 0 -Exactly
+            Should -Invoke Write-Warning -Times 1 -Exactly -ParameterFilter { $Message -match 'is set but ignored' }
             (Get-AssetDownloadBase -AllowSeam) | Should -Be 'http://127.0.0.1:18081'
-            Should -Invoke Write-Warning -Times 1 -Exactly
+            Should -Invoke Write-Warning -Times 2 -Exactly
         } finally {
             Remove-Item Env:SEDG_ASSET_BASE_URL -ErrorAction SilentlyContinue
         }

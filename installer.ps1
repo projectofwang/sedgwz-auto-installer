@@ -2162,7 +2162,9 @@ function Set-UpstreamInConfig([string]$Upstream) {
         $evict = @($list | Where-Object { $defaults -notcontains $_ }) | Select-Object -Last 1
         if (-not $evict) { break }
         $list = @($list | Where-Object { $_ -ne $evict })
-        Write-Warning (('Upstream list exceeds 8 entries; removed oldest custom entry: {0}' -f (Get-RedactedUrl $evict)))
+        $__evictShown = '[redacted]'
+        try { $__eu = [uri]$evict; $__evictShown = ($__eu.Scheme + '://' + $__eu.Host + $__eu.AbsolutePath) } catch { }
+        Write-Warning (('Upstream list exceeds 8 entries; removed oldest custom entry: {0}' -f $__evictShown))
     }
     $replacement = ("upstream:`n" + (($list | ForEach-Object { "  - $_" }) -join "`n") + "`n")
     if ([string]$block.Style -eq 'flow') {
@@ -2186,7 +2188,9 @@ function Set-UpstreamInConfig([string]$Upstream) {
     }
     if ($newline -eq "`r`n") { $updated = $updated -replace "`n", "`r`n" }
     Set-Content -LiteralPath $script:ConfigFile -Value $updated -Encoding UTF8 -NoNewline
-    Write-Done (((T 'DoneUpstreamChanged') -f (Get-RedactedUrl $Upstream)))
+    $__upShown = '[redacted]'
+    try { $__uu = [uri]$Upstream; $__upShown = ($__uu.Scheme + '://' + $__uu.Host + $__uu.AbsolutePath) } catch { }
+    Write-Done (((T 'DoneUpstreamChanged') -f $__upShown))
 }
 function Set-SystemDns {
     Ensure-Administrator
@@ -2940,17 +2944,18 @@ function Test-DnsProxyListeners {
 function Write-State([string]$DnsProxyRelease, [string]$ZapretRelease, [string]$Upstream = $null, [string[]]$UpstreamList = $null) {
     if ([string]::IsNullOrWhiteSpace($Upstream)) { $Upstream = Get-ConfiguredUpstream }
     if ($null -eq $UpstreamList) { $UpstreamList = @(Get-UpstreamList) }
+    $__redact = { param([string]$u) $r = '[redacted]'; try { $x = [uri]$u; $r = ($x.Scheme + '://' + $x.Host + $x.AbsolutePath) } catch { }; return $r }
     $state = [ordered]@{
         InstallerVersion  = $script:InstallerVersion
         DnsProxyRelease   = if ($DnsProxyRelease) { $DnsProxyRelease } else { 'Unknown' }
         ZapretRelease     = if ($ZapretRelease) { $ZapretRelease } else { 'Unknown' }
-        Upstream          = (Get-RedactedUrl $Upstream)
+        Upstream          = (& $__redact $Upstream)
         Updated           = (Get-Date).ToUniversalTime().ToString('o')
     }
     # Additive: old readers ignore unknown fields; omit when empty.
     # F10: state keeps the redacted upstream only; the full URL (with any
     # ?token=) lives in config.yaml alone.
-    if (@($UpstreamList).Count -gt 0) { $state['upstream_list'] = @(@($UpstreamList) | ForEach-Object { Get-RedactedUrl ([string]$_) }) }
+    if (@($UpstreamList).Count -gt 0) { $state['upstream_list'] = @(@($UpstreamList) | ForEach-Object { & $__redact ([string]$_) }) }
 
     $json = $state | ConvertTo-Json -Depth 3
     $json | Set-Content -LiteralPath $script:StateFile -Encoding UTF8
