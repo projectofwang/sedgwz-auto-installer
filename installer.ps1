@@ -2148,8 +2148,6 @@ function Set-UpstreamInConfig([string]$Upstream) {
 function Set-SystemDns {
     Ensure-Administrator
     Test-Platform
-    Enter-InstallerMutex
-    try {
     Write-Title (T 'DnsTitle')
     Write-Host ('  ' + (T 'DnsIntro1'))
     Write-Host ('  ' + (T 'DnsIntro2'))
@@ -2211,6 +2209,8 @@ function Set-SystemDns {
         }
     }
 
+    Enter-InstallerMutex
+    try {
     $adapters = @(Get-NetworkAdapters -IncludeVirtual)
     if ($adapters.Count -eq 0) {
         throw (T 'NoAdapters')
@@ -2271,8 +2271,6 @@ function Restart-DnsProxyService([string]$FailMessage) {
 function Set-Upstream([string]$SelectedUpstream = $null) {
     Ensure-Administrator
     Test-Platform
-    Enter-InstallerMutex
-    try {
     if (-not (Test-Path $script:InstallPath)) { throw (T 'NotFound') }
     $resetDefaults = $false
 
@@ -2306,6 +2304,8 @@ function Set-Upstream([string]$SelectedUpstream = $null) {
         throw (T 'UpBad')
     }
 
+    Enter-InstallerMutex
+    try {
     Write-Step (T 'UpChanging')
     Stop-Service -Name $script:DnsProxyService -Force -ErrorAction SilentlyContinue
     try {

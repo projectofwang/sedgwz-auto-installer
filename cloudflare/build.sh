@@ -57,7 +57,7 @@ for f in $(grep -o 'mascots/[A-Za-z0-9_.-]*\.webp' cloudflare/landing.html | sor
 done
 grep -q 'Cache-Control: no-store' cloudflare/public/_headers || { echo "ERROR: _headers missing Cache-Control: no-store" >&2; exit 1; }
 
-installer_version="$(sed -n "s/^\$script:InstallerVersion = '\([^']*\)'.*/\1/p" installer.ps1 | head -n1)"
+installer_version="$(awk -F"'" '/^\$script:InstallerVersion = /{ if (!v) v=$2 } END{ print v }' installer.ps1)"
 # Parse JSON with node (always present where wrangler runs); a naive
 # first-"version"-match would catch the NSSM version instead.
 manifest_version="$(node -p "require('./approved-releases.json').installer.version")"

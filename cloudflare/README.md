@@ -31,7 +31,8 @@ sign-in). The `cf` beta cannot spawn its Wrangler delegate on Windows
 - Deploy: `npm run deploy:cf`
 
 When upstream `cf` fixes the Windows spawn, replace the delegate call
-with plain `cf build`.
+with plain `cf build`. Transitive pre-releases (e.g. miniflare alpha, unenv
+rc) ride along with the pinned deps and are not bumped separately.
 
 Smoke (after deploy, 3 lines — version.json commit must equal HEAD):
 

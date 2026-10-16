@@ -12,3 +12,6 @@ updates:
     directory: "/cloudflare"
     schedule:
       interval: "weekly"
+    # `cf` is beta: bump by hand together with a real deploy, never via bot.
+    ignore:
+      - dependency-name: "cf"
