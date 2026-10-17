@@ -11,7 +11,7 @@ Push to `main` auto-builds via the dashboard Git integration:
 
 - Build: `bash cloudflare/build.sh` (`npm run build:cloudflare`)
 - Deploy: `npm run deploy:cf` (primary, `cf` CLI)
-- Fallback: `npm run deploy` (Wrangler; keep `wrangler.toml` for it)
+- Fallback: direct Wrangler path via `wrangler.toml` (currently no npm script for it)
 - Root directory: `/`, branch: `main`
 
 The build rejects installer/manifest version mismatch, then emits
@@ -41,7 +41,7 @@ BASE=https://dl.taiyuanwangjie.dpdns.org
 [ "$(curl -fsSL "$BASE/version.json" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).commit")" = "$(git rev-parse HEAD)" ] && echo "smoke OK"
 ```
 
-Wrangler fallback (`npm run deploy`, `wrangler.toml`) targets Wrangler 4.x
+Wrangler fallback (direct path via `wrangler.toml`, currently no npm script) targets Wrangler 4.x
 (pinned in `cloudflare/package.json`); the fallback path is kept for
 emergencies and is not regularly tested — prefer `npm run deploy:cf`.
 
