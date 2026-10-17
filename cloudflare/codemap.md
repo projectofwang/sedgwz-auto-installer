@@ -11,7 +11,7 @@ Static distribution channel for the installer. Publishes `installer.ps1`, `appro
 - **Version gate:** build parses `$script:InstallerVersion` from `installer.ps1` (sed) and `.installer.version` from `approved-releases.json` (node, avoids false NSSM-version match); mismatch or unparseable → hard fail.
 - **Headers instead of Worker logic:** `_headers` sets `no-store` on `/`, `/index.html`, `/installer.ps1`, `/version.json`, `/approved-releases.json`, `/SHA256SUMS`, plus `nosniff` / `DENY` / HSTS / strict CSP; explicit `text/plain` for `.ps1` and `SHA256SUMS`. `workers_dev = false` — custom domain only.
 - **Landing page (`landing.html`):** single static file, inline CSS + vanilla JS (no build step): VI/EN toggle via `data-en`/`data-vi` + localStorage, copy buttons (clipboard + textarea fallback), version badge + `sha256:` line fetched from `/version.json` (`no-store`), starfield/meteor canvas and cursor-tracking mascots, all `prefers-reduced-motion`-aware, `noindex`. Static assets: `mascots/*.webp` (10 sprite sheets) + `favicon.svg`.
-- **Dual deploy CLIs:** primary `cf` beta (`npm run deploy:cf`, node-invoked Wrangler delegate as Windows `spawn EFTYPE` workaround), fallback Wrangler (`npm run deploy`, keeps `wrangler.toml`). GitHub Actions runs checks only — never deploys.
+- **Dual deploy CLIs:** primary `cf` beta (`npm run deploy:cf`, node-invoked Wrangler delegate as Windows `spawn EFTYPE` workaround), fallback Wrangler (direct path via `wrangler.toml`, currently no npm script). GitHub Actions runs checks only — never deploys.
 
 ## Flow
 
