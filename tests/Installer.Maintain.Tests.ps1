@@ -93,6 +93,9 @@ BeforeAll {
     function global:Stop-Service { param($Name, [switch]$Force, $ErrorAction) $global:SedgTestCalls += "Stop-Service:$Name" }
     function global:Stop-Process { param($Id, $Name, [switch]$Force, $ErrorAction) $global:SedgTestCalls += 'Stop-Process' }
     function global:Start-Sleep { param($Seconds, $Milliseconds) $global:SedgTestCalls += 'Start-Sleep' }
+    # Remove-Services unregisters the task only when it exists (F2 idempotency).
+    # Report it present so ordering assertions still exercise the unregister.
+    function global:Get-ScheduledTask { param($TaskName, $ErrorAction) return [pscustomobject]@{ TaskName = [string]$TaskName } }
     function global:Unregister-ScheduledTask { param($TaskName, $Confirm, $ErrorAction) $global:SedgTestCalls += "Unregister-ScheduledTask:$TaskName" }
 
     # Native helpers (no SCM/ACL/DNS changes; keep $LASTEXITCODE at 0).
@@ -148,7 +151,7 @@ AfterAll {
     $stubNames = @(
         'Write-Host', 'Write-Step', 'Write-Done',
         'Get-Service', 'Start-Service', 'Stop-Service', 'Stop-Process', 'Start-Sleep',
-        'Unregister-ScheduledTask', 'sc.exe', 'icacls.exe', 'ipconfig',
+        'Unregister-ScheduledTask', 'Get-ScheduledTask', 'sc.exe', 'icacls.exe', 'ipconfig',
         'Get-NetAdapter', 'Get-DnsClientServerAddress', 'Get-NetworkAdapters',
         'Get-StaticDnsServers', 'Set-SecureAcl', 'Set-AdapterDnsStatic',
         'Set-AdapterDnsBoth', 'Set-AdapterDnsFamily', 'Reset-DnsToDhcp',
@@ -524,6 +527,7 @@ Describe 'Service lifecycle (mocked)' {
         Remove-Services
 
         ($global:SedgTestCalls -join "`n") | Should -Be (@(
+            "Unregister-ScheduledTask:$($script:WatchdogTask)",
             "Get-Service:$($script:WinwsService)",
             "Stop-Service:$($script:WinwsService)",
             "sc.exe:delete $($script:WinwsService)",
@@ -531,8 +535,7 @@ Describe 'Service lifecycle (mocked)' {
             "Stop-Service:$($script:DnsProxyService)",
             "sc.exe:delete $($script:DnsProxyService)",
             "Get-Service:$($script:WinwsService)",
-            "Get-Service:$($script:DnsProxyService)",
-            "Unregister-ScheduledTask:$($script:WatchdogTask)"
+            "Get-Service:$($script:DnsProxyService)"
         ) -join "`n")
     }
     It 'Create-Services removes, installs and configures through stubs in order' {
@@ -556,11 +559,11 @@ Describe 'Service lifecycle (mocked)' {
         Create-Services -DnsOnly:$script:DnsOnly
 
         Assert-CallOrder @(
+            "Unregister-ScheduledTask:$($script:WatchdogTask)",
             "Get-Service:$($script:WinwsService)",
             "Stop-Service:$($script:WinwsService)",
             "Get-Service:$($script:DnsProxyService)",
             "Stop-Service:$($script:DnsProxyService)",
-            "Unregister-ScheduledTask:$($script:WatchdogTask)",
             "Invoke-Nssm:install $($script:WinwsService)*",
             "sc.exe:config $($script:WinwsService) depend= Tcpip",
             "Invoke-Nssm:install $($script:DnsProxyService)*",

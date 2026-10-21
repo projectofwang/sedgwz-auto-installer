@@ -1715,6 +1715,81 @@ function Set-InstallerBootstrapDns {
     Write-Done 'Temporary DNS is ready.'
 }
 
+function Get-PinnedNssmSource($ManifestNssm) {
+    # F1: NSSM runs with installer/admin rights, so its origin and digest are
+    # trusted only from this script. The manifest (primary or fallback) may
+    # confirm the embedded pin, never choose it: a mismatch fails closed before
+    # any download, extraction, copy or execution.
+    $sha = ([string]$script:NssmSha256).Trim().ToLowerInvariant()
+    $url = [string]$script:Sources.NssmZip
+    $version = [string]$script:NssmVersion
+    if ($sha.Length -ne 64 -or $sha -notmatch '^[0-9a-f]{64}$') {
+        throw 'Embedded NSSM SHA-256 pin is missing or malformed; refusing to install NSSM.'
+    }
+    if (-not (Test-DownloadUrl $url)) {
+        throw 'Embedded NSSM URL is missing or not https; refusing to install NSSM.'
+    }
+    if ($null -eq $ManifestNssm) {
+        throw 'Approved manifest is missing the nssm component; refusing to install NSSM.'
+    }
+    $expected = [ordered]@{
+        version = $version
+        asset   = ('nssm-{0}.zip' -f $version)
+        url     = $url
+        sha256  = $sha
+    }
+    foreach ($field in $expected.Keys) {
+        $actual = (Get-ManifestString $ManifestNssm $field).Trim()
+        if ($field -eq 'sha256') { $actual = $actual.ToLowerInvariant() }
+        if ($actual -ne [string]$expected[$field]) {
+            throw ("Approved manifest nssm.{0} does not match the embedded NSSM pin; refusing to download, extract or run NSSM." -f $field)
+        }
+    }
+    return [pscustomobject]@{
+        Version = $version
+        Asset   = $expected.asset
+        Url     = $url
+        Sha256  = $sha
+        Mirror  = (Get-ManifestString $ManifestNssm 'mirror')
+    }
+}
+
+function Install-StageNssm([string]$StageRoot, $ManifestNssm) {
+    $pin = Get-PinnedNssmSource $ManifestNssm
+    $nssmUrls = @([string]$pin.Url)
+    $mirror = [string]$pin.Mirror
+    if ((-not [string]::IsNullOrWhiteSpace($mirror)) -and ($mirror -ne $pin.Url) -and (Test-DownloadUrl $mirror)) {
+        $nssmUrls += $mirror
+    }
+
+    Write-Step (((T 'StPrepNssm') -f $pin.Version))
+    Write-Host (('  ' + (T 'LbSource') + ': ' + ($nssmUrls -join ' | '))) -ForegroundColor DarkGray
+    $nssmZip = Join-Path $script:TempPath 'nssm.zip'
+    Write-Host (('  ' + (T 'LbDest') + ': ' + $nssmZip)) -ForegroundColor DarkGray
+    $nssmDownloaded = $false
+    $nssmDlErrors = @()
+    foreach ($candidateUrl in $nssmUrls) {
+        try {
+            Download-File $candidateUrl $nssmZip
+            $nssmDownloaded = $true
+            break
+        } catch { $nssmDlErrors += ('{0}: {1}' -f $candidateUrl, $_.Exception.Message) }
+    }
+    if (-not $nssmDownloaded) { throw ("NSSM download failed: {0}" -f ($nssmDlErrors -join ' | ')) }
+    Write-Host (('  ' + (T 'LbSize') + ': ' + ("{0:N0}" -f (Get-Item $nssmZip).Length) + ' ' + (T 'LbBytes'))) -ForegroundColor DarkGray
+    $null = Verify-Sha256 $nssmZip ([string]$pin.Sha256) (T 'LblNssmArchive')
+    $nssmExtract = Join-Path $script:TempPath 'nssm'
+    Expand-Zip $nssmZip $nssmExtract
+    $nssmExe = Get-ChildItem $nssmExtract -Recurse -File -Filter nssm.exe |
+        Where-Object { $_.FullName -match '\\win64\\nssm\.exe$' } |
+        Select-Object -First 1
+    if (-not $nssmExe) { throw '64-bit NSSM executable not found in the pinned archive.' }
+    $stageNssm = Join-Path $StageRoot 'nssm.exe'
+    Copy-Item -LiteralPath $nssmExe.FullName -Destination $stageNssm -Force
+    Write-Done (((T 'DoneNssmStaged') -f $pin.Version))
+    return $stageNssm
+}
+
 function Install-StageComponents {
     param([switch]$AllowSeam)
     Write-Step 'Preparing component installation...'
@@ -1734,6 +1809,9 @@ function Install-StageComponents {
     Write-Step 'Checking approved component versions...'
     $manifest = Get-ApprovedManifest
     Assert-ManifestComponents $manifest
+    # F1: reject a manifest whose NSSM values differ from the embedded trust
+    # anchor before downloading anything, whichever origin produced it.
+    $null = Get-PinnedNssmSource $manifest.components.nssm
     Write-Host (('  ' + ((T 'LbApproved') -f 'installer') + ': ' + $manifest.installer.version)) -ForegroundColor DarkGray
     Write-Host (('  ' + ((T 'LbApproved') -f 'DNSProxy') + ': ' + $manifest.components.dnsproxy.tag)) -ForegroundColor DarkGray
     Write-Host (('  ' + ((T 'LbApproved') -f 'Zapret') + ': ' + $manifest.components.zapret.tag)) -ForegroundColor DarkGray
@@ -1799,42 +1877,7 @@ function Install-StageComponents {
 
     Write-Done 'Zapret prepared.'
 
-    $stageNssm = Join-Path $stageRoot 'nssm.exe'
-    $nssmVersion = [string]$manifest.components.nssm.version
-    if ([string]::IsNullOrWhiteSpace($nssmVersion)) { $nssmVersion = $script:NssmVersion }
-    $nssmHash = [string]$manifest.components.nssm.sha256
-    if ([string]::IsNullOrWhiteSpace($nssmHash)) { $nssmHash = $script:NssmSha256 }
-    $nssmUrls = @()
-    $primaryNssm = [string]$manifest.components.nssm.url
-    if ([string]::IsNullOrWhiteSpace($primaryNssm)) { $primaryNssm = $script:Sources.NssmZip }
-    $nssmUrls += $primaryNssm
-    $mirrorNssm = Get-ManifestString $manifest.components.nssm 'mirror'
-    if ((-not [string]::IsNullOrWhiteSpace($mirrorNssm)) -and ($mirrorNssm -ne $primaryNssm) -and (Test-DownloadUrl $mirrorNssm)) {
-        $nssmUrls += $mirrorNssm
-    }
-    Write-Step (((T 'StPrepNssm') -f $nssmVersion))
-    Write-Host (('  ' + (T 'LbSource') + ': ' + ($nssmUrls -join ' | '))) -ForegroundColor DarkGray
-    $nssmZip=Join-Path $script:TempPath 'nssm.zip'
-    Write-Host (('  ' + (T 'LbDest') + ': ' + $nssmZip)) -ForegroundColor DarkGray
-    $nssmDownloaded = $false
-    $nssmDlErrors = @()
-    foreach ($candidateUrl in $nssmUrls) {
-        try {
-            Download-File $candidateUrl $nssmZip
-            $nssmDownloaded = $true
-            break
-        } catch { $nssmDlErrors += ('{0}: {1}' -f $candidateUrl, $_.Exception.Message) }
-    }
-    if (-not $nssmDownloaded) { throw ("NSSM download failed: {0}" -f ($nssmDlErrors -join ' | ')) }
-    Write-Host (('  ' + (T 'LbSize') + ': ' + ("{0:N0}" -f (Get-Item $nssmZip).Length) + ' ' + (T 'LbBytes'))) -ForegroundColor DarkGray
-    $null = Verify-Sha256 $nssmZip $nssmHash (T 'LblNssmArchive')
-    $nssmExtract=Join-Path $script:TempPath 'nssm'; Expand-Zip $nssmZip $nssmExtract
-    $nssmExe = Get-ChildItem $nssmExtract -Recurse -File -Filter nssm.exe |
-        Where-Object { $_.FullName -match '\\win64\\nssm\.exe$' } |
-        Select-Object -First 1
-    if (-not $nssmExe) { throw '64-bit NSSM executable not found in the pinned archive.' }
-    Copy-Item -LiteralPath $nssmExe.FullName -Destination $stageNssm -Force
-    Write-Done (((T 'DoneNssmStaged') -f $nssmVersion))
+    $stageNssm = Install-StageNssm $stageRoot $manifest.components.nssm
     Write-Done 'Services prepared.'
 
     Write-Step 'Validating staged components...'
@@ -2710,6 +2753,18 @@ function Invoke-Nssm([string[]]$Arguments) {
 
 function Remove-Services {
     Write-Step 'Removing existing Windows services...'
+    $errors = @()
+
+    # F2: the watchdog task is independent of the services. Unregister it
+    # first so a slow or failing service delete can never leave a SYSTEM task
+    # behind. A missing task is already clean (idempotent).
+    try {
+        if (Get-ScheduledTask -TaskName $script:WatchdogTask -ErrorAction SilentlyContinue) {
+            Unregister-ScheduledTask -TaskName $script:WatchdogTask -Confirm:$false -ErrorAction Stop
+        }
+    } catch {
+        $errors += ("Failed to unregister scheduled task '{0}': {1}" -f $script:WatchdogTask, $_.Exception.Message)
+    }
 
     foreach ($name in @($script:WinwsService, $script:DnsProxyService)) {
         $service = Get-Service -Name $name -ErrorAction SilentlyContinue
@@ -2721,14 +2776,17 @@ function Remove-Services {
 
         # NSSM owns these services. Use NSSM removal when the pinned binary
         # is available; fall back to sc.exe for recovery/partial installs.
+        $removed = $false
         if (Test-Path -LiteralPath $script:NssmPath) {
             try {
                 & $script:NssmPath remove $name confirm 2>$null | Out-Null
-                if ($LASTEXITCODE -eq 0) { continue }
+                if ($LASTEXITCODE -eq 0) { $removed = $true }
             } catch { Write-Warning ('SEDG:Remove-Services: & $script:NssmPath remove $name confirm 2>$null | Out-Null i... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
         }
 
-        & sc.exe delete $name 2>$null | Out-Null
+        if (-not $removed) {
+            try { & sc.exe delete $name 2>$null | Out-Null } catch { $errors += ("Failed to delete service '{0}': {1}" -f $name, $_.Exception.Message) }
+        }
     }
 
     $deadline = (Get-Date).AddSeconds(10)
@@ -2749,10 +2807,10 @@ function Remove-Services {
 
     if (@($remaining).Count -gt 0) {
         $names = @($remaining | ForEach-Object { $_.Name }) -join ', '
-        throw "Timed out waiting for services to be removed: $names"
+        $errors += "Timed out waiting for services to be removed: $names"
     }
 
-    try { Unregister-ScheduledTask -TaskName $script:WatchdogTask -Confirm:$false -ErrorAction Stop } catch { Write-Warning ('SEDG:Remove-Services: Unregister-ScheduledTask -TaskName $script:WatchdogTask -Con... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+    if ($errors.Count -gt 0) { throw ($errors -join ' ') }
 
     Write-Done 'Existing Windows services removed.'
 }
@@ -3435,13 +3493,19 @@ function Uninstall-All {
     Start-OpTranscript 'Uninstall'
     try {
     Write-CreditBanner
-    if (-not (Test-Path $script:InstallPath)) {
+    $installed = Test-Path $script:InstallPath
+    if (-not $installed) {
         Write-Host (T 'NotInstalled') -ForegroundColor Yellow
-        return
+    } else {
+        Write-Title ('Serverless Edge DNS Gateway with Zapret DPI Bypass - Auto Installer - ' + (T 'MiUninstall'))
     }
-    Write-Title ('Serverless Edge DNS Gateway with Zapret DPI Bypass - Auto Installer - ' + (T 'MiUninstall'))
+    # F2: service/task/DNS cleanup is independent of the install directory.
+    # A missing directory means the files are already gone, not that leftovers
+    # (services, SYSTEM task, DNS) may be skipped. Every independent step runs
+    # and real failures are rethrown at the end.
+    $cleanupErrors = @()
     Write-Step 'Stopping services and restoring DNS...'
-    Stop-AllServices
+    try { Stop-AllServices } catch { Write-Warning ('SEDG:Uninstall-All: Stop-AllServices (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     try { Restore-DnsSettings } catch { Write-Warning ('SEDG:Uninstall-All: Restore-DnsSettings (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     if ($script:DnsRestoreIncomplete) {
         # The backup is the only record of the user's original DNS; destroying
@@ -3456,32 +3520,34 @@ function Uninstall-All {
     }
     Set-GatewayEnabled $false
     Clear-WatchdogState
-    Remove-Services
+    try { Remove-Services } catch { $cleanupErrors += $_.Exception.Message }
 
     if (Test-Path $script:ZapretPath) {
-        Remove-OwnWinDivertDriver -ScheduleIfLocked
+        try { Remove-OwnWinDivertDriver -ScheduleIfLocked } catch { $cleanupErrors += ('Failed to remove WinDivert: ' + $_.Exception.Message) }
     }
 
-    # Prefer a synchronous removal so success is verified. Fall back to a
-    # scheduled async removal only when files are still locked (e.g. the
-    # manager script itself is running from the install directory).
-    try {
-        Remove-Item -LiteralPath $script:InstallPath -Recurse -Force -ErrorAction Stop
-        Write-Host (T 'UninstDone') -ForegroundColor Green
-        Write-Host ((T 'UninstRemoved') + $script:InstallPath + '.') -ForegroundColor DarkGray
-    } catch {
+    if ($installed) {
+        # Prefer a synchronous removal so success is verified. Fall back to a
+        # scheduled async removal only when files are still locked (e.g. the
+        # manager script itself is running from the install directory).
+        try {
+            Remove-Item -LiteralPath $script:InstallPath -Recurse -Force -ErrorAction Stop
+            Write-Host (T 'UninstDone') -ForegroundColor Green
+            Write-Host ((T 'UninstRemoved') + $script:InstallPath + '.') -ForegroundColor DarkGray
+        } catch {
 
-    # Locked files remain (usually WinDivert64.sys or the running manager
-    # itself). Schedule the whole tree for reboot deletion.
-    Schedule-DeleteTreeOnReboot $script:InstallPath
-    if (Test-Path -LiteralPath $script:InstallPath) {
-        Write-Host (T 'UninstStarted') -ForegroundColor Yellow
-        Write-Host ((T 'UninstSched') + $script:InstallPath + (T 'UninstSched2')) -ForegroundColor Yellow
-        Write-Host (('  ' + (T 'InfoVerifyReboot'))) -ForegroundColor Yellow
-    } else {
-        Write-Host (T 'UninstDone') -ForegroundColor Green
-        Write-Host ((T 'UninstRemoved') + $script:InstallPath + '.') -ForegroundColor DarkGray
-    }
+        # Locked files remain (usually WinDivert64.sys or the running manager
+        # itself). Schedule the whole tree for reboot deletion.
+        Schedule-DeleteTreeOnReboot $script:InstallPath
+        if (Test-Path -LiteralPath $script:InstallPath) {
+            Write-Host (T 'UninstStarted') -ForegroundColor Yellow
+            Write-Host ((T 'UninstSched') + $script:InstallPath + (T 'UninstSched2')) -ForegroundColor Yellow
+            Write-Host (('  ' + (T 'InfoVerifyReboot'))) -ForegroundColor Yellow
+        } else {
+            Write-Host (T 'UninstDone') -ForegroundColor Green
+            Write-Host ((T 'UninstRemoved') + $script:InstallPath + '.') -ForegroundColor DarkGray
+        }
+        }
     }
     if ($Purge) {
         try { Remove-Item -LiteralPath (Join-Path $script:DnsBackupDir 'logs') -Recurse -Force -ErrorAction SilentlyContinue } catch { Write-Warning ('SEDG:Uninstall-All: Remove-Item -LiteralPath (Join-Path $script:DnsBackupDir ''lo... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
@@ -3494,6 +3560,9 @@ function Uninstall-All {
                 Remove-Item -LiteralPath $script:DnsBackupDir -Force -ErrorAction SilentlyContinue
             }
         } catch { Write-Warning ('SEDG:Uninstall-All: if ((Test-Path -LiteralPath $script:DnsBackupDir -PathType C... (' + $_.Exception.Message + ')'); Write-Verbose $_ }
+    }
+    if ($cleanupErrors.Count -gt 0) {
+        throw ('Uninstall incomplete: ' + ($cleanupErrors -join ' '))
     }
     } finally {
         try { Stop-OpTranscript } catch { Write-Warning ('SEDG:Uninstall-All: Stop-OpTranscript (' + $_.Exception.Message + ')'); Write-Verbose $_ }
