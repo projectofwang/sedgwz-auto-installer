@@ -14,11 +14,37 @@ param(
     [switch]$Purge,
     [switch]$FailClosed,
     [switch]$AllowSeam,
-    [switch]$AllowDowngrade
+    [switch]$AllowDowngrade,
+    [ValidateSet('none','jsonl')][string]$Protocol = 'none'
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# The jsonl protocol owns stdout. Capture it before any diagnostic output,
+# then move managed and native console output to stderr so the machine stream
+# stays pure. Default mode never enters this block.
+$script:ProtocolOut = $null
+$script:ProtocolResultSent = $false
+$script:ProtocolMode = $false
+$script:CdnStructured = $false
+if ($Protocol -eq 'jsonl') {
+    $script:ProtocolOut = [Console]::Out
+    try {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class SedgProtocolConsole {
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern IntPtr GetStdHandle(int nStdHandle);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool SetStdHandle(int nStdHandle, IntPtr handle);
+}
+'@
+        [void][SedgProtocolConsole]::SetStdHandle(-11, [SedgProtocolConsole]::GetStdHandle(-12))
+    } catch { }
+    try { [Console]::SetOut([Console]::Error) } catch { }
+}
 
 # Restore these in `finally` so irm|iex never pollutes the caller session.
 $script:SavedErrorAction = $ErrorActionPreference
@@ -63,6 +89,12 @@ try {
         $script:SelfContent = Get-Content -LiteralPath $script:SelfPath -Raw -ErrorAction Stop
     }
 } catch { $script:SelfContent = $null }
+
+function Test-Administrator {
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [Security.Principal.WindowsPrincipal]::new($id)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
 
 #region MaintainConfig
 # Single source of truth for install layout, pinned versions and upstream
@@ -516,12 +548,6 @@ function Write-StatusLine([bool]$Ok, [string]$Label, [string]$Value) {
     Write-Host ("  {0,-5} {1,-24}: {2}" -f $mark, $Label, $Value) -ForegroundColor $color
 }
 
-function Test-Administrator {
-    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = [Security.Principal.WindowsPrincipal]::new($id)
-    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-}
-
 function Ensure-Administrator {
     if (Test-Administrator) { return }
     # M5/iex: materialize the running script so elevation never executes stale code.
@@ -603,6 +629,7 @@ function Exit-InstallerMutex {
 function Start-OpTranscript([string]$ForAction) {
     # Best-effort transcript into the admin-only ProgramData dir (survives
     # install wipes). Never throws; logging must not block the operation.
+    if ($Protocol -eq 'jsonl') { return }
     if ($script:OpTranscript) { return }
     try {
         $logDir = Join-Path $script:DnsBackupDir 'logs'
@@ -2236,6 +2263,7 @@ function Set-UpstreamInConfig([string]$Upstream) {
     Write-Done (((T 'DoneUpstreamChanged') -f $__upShown))
 }
 function Set-SystemDns {
+    param([string[]]$Servers = $null)
     Ensure-Administrator
     Test-Platform
     Write-Title (T 'DnsTitle')
@@ -2243,59 +2271,84 @@ function Set-SystemDns {
     Write-Host ('  ' + (T 'DnsIntro2'))
     Write-Host ''
 
-    $primary = Read-Host (T 'DnsPrimary')
-    if ([string]::IsNullOrWhiteSpace($primary)) {
-        throw (T 'DnsPrimaryReq')
-    }
-
-    try {
-        $parsedPrimary = [System.Net.IPAddress]::Parse($primary.Trim())
-        if ($parsedPrimary.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) {
-            throw 'IPv4 address required.'
+    $v4 = @()
+    $v6 = @()
+    if ($null -eq $Servers) {
+        $primary = Read-Host (T 'DnsPrimary')
+        if ([string]::IsNullOrWhiteSpace($primary)) {
+            throw (T 'DnsPrimaryReq')
         }
-    } catch {
-        throw ((T 'DnsBadV4') + $primary)
-    }
 
-    $secondary = Read-Host (T 'DnsSecondary')
-    $v4 = @($primary.Trim())
-
-    if (-not [string]::IsNullOrWhiteSpace($secondary)) {
         try {
-            $parsedSecondary = [System.Net.IPAddress]::Parse($secondary.Trim())
-            if ($parsedSecondary.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) {
+            $parsedPrimary = [System.Net.IPAddress]::Parse($primary.Trim())
+            if ($parsedPrimary.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) {
                 throw 'IPv4 address required.'
             }
         } catch {
-            throw ((T 'DnsBadV4') + $secondary)
+            throw ((T 'DnsBadV4') + $primary)
         }
-        $v4 += $secondary.Trim()
-    }
 
-    $ipv6 = Read-Host (T 'DnsV6')
-    $v6 = @()
-    if (-not [string]::IsNullOrWhiteSpace($ipv6)) {
-        try {
-            $parsedIPv6 = [System.Net.IPAddress]::Parse($ipv6.Trim())
-            if ($parsedIPv6.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetworkV6) {
-                throw 'IPv6 address required.'
-            }
-        } catch {
-            throw ((T 'DnsBadV6') + $ipv6)
-        }
-        $v6 += $ipv6.Trim()
+        $secondary = Read-Host (T 'DnsSecondary')
+        $v4 = @($primary.Trim())
 
-        $ipv6Secondary = Read-Host (T 'DnsV6Sec')
-        if (-not [string]::IsNullOrWhiteSpace($ipv6Secondary)) {
+        if (-not [string]::IsNullOrWhiteSpace($secondary)) {
             try {
-                $parsedIPv6Secondary = [System.Net.IPAddress]::Parse($ipv6Secondary.Trim())
-                if ($parsedIPv6Secondary.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetworkV6) {
+                $parsedSecondary = [System.Net.IPAddress]::Parse($secondary.Trim())
+                if ($parsedSecondary.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) {
+                    throw 'IPv4 address required.'
+                }
+            } catch {
+                throw ((T 'DnsBadV4') + $secondary)
+            }
+            $v4 += $secondary.Trim()
+        }
+
+        $ipv6 = Read-Host (T 'DnsV6')
+        if (-not [string]::IsNullOrWhiteSpace($ipv6)) {
+            try {
+                $parsedIPv6 = [System.Net.IPAddress]::Parse($ipv6.Trim())
+                if ($parsedIPv6.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetworkV6) {
                     throw 'IPv6 address required.'
                 }
             } catch {
-                throw ((T 'DnsBadV6') + $ipv6Secondary)
+                throw ((T 'DnsBadV6') + $ipv6)
             }
-            $v6 += $ipv6Secondary.Trim()
+            $v6 += $ipv6.Trim()
+
+            $ipv6Secondary = Read-Host (T 'DnsV6Sec')
+            if (-not [string]::IsNullOrWhiteSpace($ipv6Secondary)) {
+                try {
+                    $parsedIPv6Secondary = [System.Net.IPAddress]::Parse($ipv6Secondary.Trim())
+                    if ($parsedIPv6Secondary.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetworkV6) {
+                        throw 'IPv6 address required.'
+                    }
+                } catch {
+                    throw ((T 'DnsBadV6') + $ipv6Secondary)
+                }
+                $v6 += $ipv6Secondary.Trim()
+            }
+        }
+    } else {
+        if ($Servers.Count -lt 1 -or $Servers.Count -gt 4) {
+            throw 'setDns requires 1 to 4 addresses.'
+        }
+        foreach ($server in $Servers) {
+            $text = [string]$server
+            if ([string]::IsNullOrWhiteSpace($text)) {
+                throw 'setDns requires non-empty addresses.'
+            }
+            try {
+                $parsed = [System.Net.IPAddress]::Parse($text.Trim())
+            } catch {
+                throw ((T 'DnsBadV4') + $text)
+            }
+            if ($parsed.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork) {
+                $v4 += $text.Trim()
+            } elseif ($parsed.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetworkV6) {
+                $v6 += $text.Trim()
+            } else {
+                throw ((T 'DnsBadV4') + $text)
+            }
         }
     }
 
@@ -2358,13 +2411,13 @@ function Restart-DnsProxyService([string]$FailMessage) {
     Test-DnsProxyListeners
 }
 
-function Set-Upstream([string]$SelectedUpstream = $null) {
+function Set-Upstream([string]$SelectedUpstream = $null, [switch]$ResetDefaults) {
     Ensure-Administrator
     Test-Platform
     if (-not (Test-Path $script:InstallPath)) { throw (T 'NotFound') }
-    $resetDefaults = $false
+    $resetDefaults = [bool]$ResetDefaults
 
-    if ([string]::IsNullOrWhiteSpace($SelectedUpstream)) {
+    if ((-not $resetDefaults) -and [string]::IsNullOrWhiteSpace($SelectedUpstream)) {
         Write-Title (T 'UpTitle')
         $presetNames = @($script:OptionalUpstreams.Keys)
         for ($i = 0; $i -lt $presetNames.Count; $i++) {
@@ -3067,6 +3120,9 @@ function Wait-HandoffClosePrompt {
 }
 
 function Update-ManagerFromDist([string]$ForAction) {
+    # The protocol caller owns the process and expects exactly one result; the
+    # manager self-update would print a handoff prompt and exit without one.
+    if ($script:ProtocolMode) { return $false }
     # Self-update the local manager before Install/Update so an old manager
     # never fails the version check and destroys a working setup. After a
     # successful update the new manager is NOT re-execed in this console:
@@ -3733,6 +3789,8 @@ function Resolve-CdnIPv4([string]$Domain) {
     return $ip
 }
 function Test-CDNOptimization {
+    $structured = $false
+    try { $structured = [bool]$script:CdnStructured } catch { }
     Write-Step 'Verifying CDN Vietnam Optimization...'
 
     # Flush stale negative DNS entries so one transient stall cannot fail the whole loop.
@@ -3849,6 +3907,14 @@ function Test-CDNOptimization {
 
     Write-Host ''
     Write-Done 'CDN connectivity verification completed.'
+    if ($structured) {
+        return [ordered]@{
+            checkedAt = (Get-Date).ToString('o')
+            location  = $location
+            isp       = $isp
+            targets   = @($targets | ForEach-Object { [ordered]@{ name = $_.Name; domain = $_.Domain } })
+        }
+    }
 }
 function Show-InstallSummary {
     Write-Host ""
@@ -3870,7 +3936,7 @@ function Show-InstallSummary {
     Show-ServiceTests
     # CDN test is opt-in: it adds delay and queries third-party geo APIs.
     $runCdn = [bool]$IncludeCdnTest
-    if (-not $runCdn -and $Action -eq 'Menu') {
+    if (-not $runCdn -and $Action -eq 'Menu' -and -not $script:ProtocolMode) {
         $answer = Read-Host (T 'CdnAsk')
         if ($answer -match '^[YyCc1]') { $runCdn = $true }
     }
@@ -3975,6 +4041,392 @@ function Select-EntryLanguage {
     }
 }
 
+function Write-ProtocolLine($Object) {
+    if (-not $script:ProtocolOut) { throw 'Protocol stdout is unavailable.' }
+    $json = $Object | ConvertTo-Json -Compress -Depth 10
+    $script:ProtocolOut.WriteLine($json)
+    $script:ProtocolOut.Flush()
+}
+
+function New-ProtocolProbe([string]$State, $Value = $null, [string]$Reason = '') {
+    if ($State -eq 'known') {
+        return [ordered]@{ state = 'known'; value = $Value }
+    }
+    if ($State -eq 'notApplicable') {
+        return [ordered]@{ state = 'notApplicable' }
+    }
+    if ([string]::IsNullOrWhiteSpace($Reason)) { $Reason = 'Probe could not be evaluated.' }
+    return [ordered]@{ state = 'unknown'; reason = $Reason }
+}
+
+function New-ProtocolResult([bool]$Ok, [string]$Code, [string]$Message, $Data = $null, [string]$CurrentState = 'unchanged', [string]$RestoredState = 'notRequired', [string]$NextStep = 'none') {
+    $result = [ordered]@{
+        type          = 'result'
+        ok            = $Ok
+        code          = $Code
+        message       = $Message
+        currentState  = $CurrentState
+        restoredState = $RestoredState
+        nextStep      = $NextStep
+    }
+    if ($null -ne $Data) { $result['data'] = $Data }
+    if ($script:OpTranscript) { $result['transcriptPath'] = [string]$script:OpTranscript }
+    return $result
+}
+
+function Get-StatusSnapshot {
+    $snapshot = [ordered]@{}
+    $installed = $false
+    $installProbeError = $null
+    try {
+        $installed = Test-Path -LiteralPath $script:InstallPath -ErrorAction Stop
+    } catch { $installProbeError = $_.Exception.Message }
+    if ($installProbeError) {
+        $snapshot['installPresence'] = New-ProtocolProbe 'unknown' $null ('Install presence probe failed: ' + $installProbeError)
+        foreach ($name in @('services', 'watchdog', 'dnsPerAdapter', 'upstream', 'versions', 'lastUpdate')) {
+            $snapshot[$name] = New-ProtocolProbe 'unknown' $null 'Install presence is unknown.'
+        }
+        $snapshot['readiness'] = New-ProtocolProbe 'unknown' $null 'Install presence is unknown.'
+        $snapshot['phases'] = @()
+        $snapshot['observedUtc'] = (Get-Date).ToUniversalTime().ToString('o')
+        return $snapshot
+    }
+    $snapshot['installPresence'] = New-ProtocolProbe 'known' ([ordered]@{ installed = $installed; installPath = $script:InstallPath })
+
+    if (-not $installed) {
+        foreach ($name in @('services', 'watchdog', 'dnsPerAdapter', 'upstream', 'versions', 'lastUpdate')) {
+            $snapshot[$name] = New-ProtocolProbe 'notApplicable'
+        }
+        $snapshot['readiness'] = New-ProtocolProbe 'known' ([ordered]@{ state = 'attention'; reasons = @('notInstalled') })
+        $snapshot['phases'] = @()
+        $snapshot['observedUtc'] = (Get-Date).ToUniversalTime().ToString('o')
+        return $snapshot
+    }
+
+    $serviceStatus = @{}
+    $serviceRows = @()
+    try {
+        foreach ($name in @($script:DnsProxyService, $script:WinwsService)) {
+            $service = Get-Service -Name $name -ErrorAction Stop
+            $startType = 'unknown'
+            try {
+                $wmi = Get-CimInstance -ClassName Win32_Service -Filter ("Name='" + $name + "'") -ErrorAction Stop
+                if ($wmi -and $wmi.PSObject.Properties['StartMode']) { $startType = [string]$wmi.StartMode }
+            } catch { }
+            $serviceStatus[$name] = [string]$service.Status
+            $serviceRows += [ordered]@{ name = $name; status = [string]$service.Status; startType = $startType }
+        }
+        $snapshot['services'] = New-ProtocolProbe 'known' $serviceRows
+    } catch {
+        $snapshot['services'] = New-ProtocolProbe 'unknown' $null ('Service probe failed: ' + $_.Exception.Message)
+    }
+
+    try {
+        $task = Get-ScheduledTask -TaskName $script:WatchdogTask -ErrorAction Stop
+        $lastRun = $null
+        $lastOutcome = $null
+        try {
+            $taskInfo = Get-ScheduledTaskInfo -TaskName $script:WatchdogTask -ErrorAction Stop
+            if ($taskInfo -and $taskInfo.PSObject.Properties['LastRunTime'] -and $taskInfo.LastRunTime) {
+                $lastRun = ([DateTimeOffset]$taskInfo.LastRunTime).ToString('o')
+            }
+            if ($taskInfo -and $taskInfo.PSObject.Properties['LastTaskResult']) {
+                $lastOutcome = [string]$taskInfo.LastTaskResult
+            }
+        } catch { }
+        $snapshot['watchdog'] = New-ProtocolProbe 'known' ([ordered]@{
+            taskName            = $script:WatchdogTask
+            enabled             = ([string]$task.State -ne 'Disabled')
+            lastRunUtc          = $lastRun
+            lastOutcome         = $lastOutcome
+            lastFallbackUtc     = $null
+            lastFallbackReason  = $null
+            failClosed          = (Test-Path -LiteralPath $script:FailClosedFile)
+        })
+    } catch {
+        $snapshot['watchdog'] = New-ProtocolProbe 'unknown' $null ('Watchdog probe failed: ' + $_.Exception.Message)
+    }
+
+    $dnsRows = @()
+    try {
+        $adapters = @(Get-NetworkAdapters -IncludeVirtual)
+        foreach ($adapter in $adapters) {
+            $v4 = @()
+            $v6 = @()
+            foreach ($row in @(Get-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ErrorAction Stop)) {
+                foreach ($address in @($row.ServerAddresses)) {
+                    if ([string]::IsNullOrWhiteSpace([string]$address)) { continue }
+                    try {
+                        $parsed = [System.Net.IPAddress]::Parse([string]$address)
+                        if ($parsed.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork) { $v4 += [string]$address }
+                        else { $v6 += [string]$address }
+                    } catch { }
+                }
+            }
+            $servers = @($v4 + $v6)
+            # H4 parity: the registry NameServer value, not the presence of
+            # resolved/autoconfigured addresses, is the static-DNS signal.
+            $static4 = Get-StaticDnsServers ([string]$adapter.InterfaceGuid) 'Tcpip'
+            $static6 = Get-StaticDnsServers ([string]$adapter.InterfaceGuid) 'Tcpip6'
+            if ($null -eq $static4 -or $null -eq $static6) {
+                throw ('Static-DNS registry probe failed for adapter ' + $adapter.Name + '.')
+            }
+            $mode = if (@($static4).Count -gt 0 -or @($static6).Count -gt 0) { 'static' } else { 'dhcp' }
+            $dnsRows += [ordered]@{
+                adapterName     = [string]$adapter.Name
+                mode            = $mode
+                servers         = $servers
+                gatewayBypassed = (-not ($servers -contains '127.0.0.1'))
+            }
+        }
+        $snapshot['dnsPerAdapter'] = New-ProtocolProbe 'known' $dnsRows
+    } catch {
+        $snapshot['dnsPerAdapter'] = New-ProtocolProbe 'unknown' $null ('Adapter DNS probe failed: ' + $_.Exception.Message)
+    }
+
+    $upstreamOk = $false
+    try {
+        $configured = Get-ConfiguredUpstream
+        if (Test-DnsUpstream $configured) {
+            $upstreamOk = $true
+            $upstreamUri = [uri]$configured
+            $source = if ($configured -eq [string]$script:OptionalUpstreams['SDEG (Default)']) { 'default' } else { 'custom' }
+            $snapshot['upstream'] = New-ProtocolProbe 'known' ([ordered]@{
+                host                = $upstreamUri.Host
+                scheme              = $upstreamUri.Scheme
+                source              = $source
+                credentialsRedacted = $true
+            })
+        } else {
+            $snapshot['upstream'] = New-ProtocolProbe 'unknown' $null 'No valid configured upstream was found.'
+        }
+    } catch {
+        $snapshot['upstream'] = New-ProtocolProbe 'unknown' $null ('Upstream probe failed: ' + $_.Exception.Message)
+    }
+
+    $state = $null
+    try {
+        if (Test-Path -LiteralPath $script:StateFile -PathType Leaf) {
+            $state = Get-Content -LiteralPath $script:StateFile -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        }
+    } catch { }
+
+    try {
+        $dnsRelease = $null
+        $zapretRelease = $null
+        if ($state) {
+            if ($state.PSObject.Properties['DnsProxyRelease']) { $dnsRelease = [string]$state.DnsProxyRelease }
+            if ($state.PSObject.Properties['ZapretRelease']) { $zapretRelease = [string]$state.ZapretRelease }
+        }
+        if ([string]::IsNullOrWhiteSpace($dnsRelease) -or [string]::IsNullOrWhiteSpace($zapretRelease)) {
+            $snapshot['versions'] = New-ProtocolProbe 'unknown' $null 'The installed state does not record both component versions.'
+        } else {
+            $snapshot['versions'] = New-ProtocolProbe 'known' @(
+                [ordered]@{ component = 'installer'; installed = $script:InstallerVersion; approved = $null; match = 'unknown' },
+                [ordered]@{ component = 'dnsproxy'; installed = $dnsRelease; approved = $null; match = 'unknown' },
+                [ordered]@{ component = 'zapret'; installed = $zapretRelease; approved = $null; match = 'unknown' },
+                [ordered]@{ component = 'nssm'; installed = $script:NssmVersion; approved = $null; match = 'unknown' },
+                [ordered]@{ component = 'manager'; installed = $null; approved = $null; match = 'unknown' }
+            )
+        }
+    } catch {
+        $snapshot['versions'] = New-ProtocolProbe 'unknown' $null ('Version probe failed: ' + $_.Exception.Message)
+    }
+
+    try {
+        if ($state -and $state.PSObject.Properties['Updated'] -and -not [string]::IsNullOrWhiteSpace([string]$state.Updated)) {
+            $updated = [DateTimeOffset]::Parse([string]$state.Updated).ToString('o')
+            $snapshot['lastUpdate'] = New-ProtocolProbe 'known' ([ordered]@{
+                utc         = $updated
+                fromVersion = $null
+                toVersion   = $null
+                outcome     = 'unknown'
+                reportedBy  = 'engine'
+            })
+        } else {
+            $snapshot['lastUpdate'] = New-ProtocolProbe 'unknown' $null 'The installed state does not record a last update.'
+        }
+    } catch {
+        $snapshot['lastUpdate'] = New-ProtocolProbe 'unknown' $null ('Last-update probe failed: ' + $_.Exception.Message)
+    }
+
+    $unknownReasons = @()
+    foreach ($name in @('installPresence', 'services', 'watchdog', 'dnsPerAdapter', 'upstream', 'versions', 'lastUpdate')) {
+        if ($snapshot[$name]['state'] -eq 'unknown') {
+            $unknownReasons += ($name + ': ' + [string]$snapshot[$name]['reason'])
+        }
+    }
+    if ($unknownReasons.Count -gt 0) {
+        $snapshot['readiness'] = New-ProtocolProbe 'unknown' $null (($unknownReasons -join '; '))
+    } else {
+        $reasons = @()
+        if ($serviceStatus[$script:DnsProxyService] -ne 'Running') { $reasons += 'dnsproxyServiceNotRunning' }
+        if ($serviceStatus[$script:WinwsService] -ne 'Running') { $reasons += 'winwsServiceNotRunning' }
+        $localDns = @($dnsRows | Where-Object { @($_.servers) -contains '127.0.0.1' })
+        if ($localDns.Count -eq 0) { $reasons += 'localDnsNotActive' }
+        if (-not $upstreamOk) { $reasons += 'upstreamNotValid' }
+        if ($reasons.Count -eq 0) {
+            $snapshot['readiness'] = New-ProtocolProbe 'known' ([ordered]@{ state = 'ready'; reasons = @() })
+        } else {
+            $snapshot['readiness'] = New-ProtocolProbe 'known' ([ordered]@{ state = 'attention'; reasons = $reasons })
+        }
+    }
+    $snapshot['phases'] = @()
+    $snapshot['observedUtc'] = (Get-Date).ToUniversalTime().ToString('o')
+    return $snapshot
+}
+
+function Test-ProtocolServers($Servers) {
+    $list = @($Servers)
+    if ($list.Count -lt 1 -or $list.Count -gt 4) { return $false }
+    foreach ($server in $list) {
+        $text = [string]$server
+        if ([string]::IsNullOrWhiteSpace($text)) { return $false }
+        try { [void][System.Net.IPAddress]::Parse($text.Trim()) } catch { return $false }
+    }
+    return $true
+}
+
+function Invoke-ProtocolAction($request) {
+    $actionProperty = $request.PSObject.Properties['action']
+    if (-not $actionProperty) {
+        return New-ProtocolResult $false 'Protocol' 'The request has no action.' $null 'unknown' 'unchanged' 'Send one valid request line.'
+    }
+    $action = [string]$actionProperty.Value
+    $versionProperty = $request.PSObject.Properties['protocolVersion']
+    if ($versionProperty -and ([string]$versionProperty.Value -ne '1')) {
+        return New-ProtocolResult $false 'Protocol' 'Unsupported protocolVersion.' $null 'unknown' 'unchanged' 'Use protocolVersion 1.'
+    }
+    $argsProperty = $request.PSObject.Properties['args']
+    $args = $null
+    if ($argsProperty) { $args = $argsProperty.Value }
+
+    $known = @('Status', 'Install', 'Update', 'Pause', 'Resume', 'Restart', 'Uninstall', 'Purge', 'SetUpstream', 'SetDns', 'RestoreEngine', 'SetLanguage', 'TestCdnOptimization')
+    if ($action -notin $known) {
+        return New-ProtocolResult $false 'Protocol' ('Unknown protocol action: ' + $action) $null 'unknown' 'unchanged' 'Use a declared action.'
+    }
+
+    if ($action -eq 'RestoreEngine') {
+        return New-ProtocolResult $false 'EngineGeneric' 'RestoreEngine is reserved and is not implemented by this engine build.' $null 'unknown' 'notRequired' 'Use the app update or engine installer instead.'
+    }
+
+    $mutating = $action -in @('Install', 'Update', 'Pause', 'Resume', 'Restart', 'Uninstall', 'Purge', 'SetUpstream', 'SetDns')
+    if ($mutating) {
+        if ($action -eq 'SetDns') {
+            $serversProperty = if ($args) { $args.PSObject.Properties['servers'] } else { $null }
+            $servers = if ($serversProperty) { @($serversProperty.Value) } else { @() }
+            if (-not (Test-ProtocolServers $servers)) {
+                return New-ProtocolResult $false 'Validation' 'SetDns requires one to four parseable IPv4 or IPv6 addresses.' $null 'unchanged' 'notRequired' 'Correct the servers array.'
+            }
+        }
+        if ($action -eq 'SetUpstream') {
+            $modeProperty = if ($args) { $args.PSObject.Properties['mode'] } else { $null }
+            $urlProperty = if ($args) { $args.PSObject.Properties['upstreamUrl'] } else { $null }
+            $mode = if ($modeProperty) { [string]$modeProperty.Value } else { '' }
+            $upstreamUrl = if ($urlProperty) { [string]$urlProperty.Value } else { '' }
+            if ($mode -notin @('resetDefaults', 'custom')) {
+                return New-ProtocolResult $false 'Validation' 'SetUpstream mode must be resetDefaults or custom.' $null 'unchanged' 'notRequired' 'Correct the mode.'
+            }
+            if ($mode -eq 'custom') {
+                # Mirror the engine's existing upstream policy; plaintext HTTP is
+                # deliberately not a valid DNS-over-HTTPS transport here.
+                if (-not (Test-DnsUpstream $upstreamUrl)) {
+                    return New-ProtocolResult $false 'Validation' 'SetUpstream custom requires an absolute https/tls/h3/quic URL with a host.' $null 'unchanged' 'notRequired' 'Correct the upstreamUrl.'
+                }
+            }
+        }
+
+        # The engine mutex is the exclusivity authority: a concurrent run is
+        # refused here, before the elevation check, so the machine channel can
+        # report the busy state instead of a generic failure.
+        try { Enter-InstallerMutex } catch {
+            if ($_.Exception.Message -eq (T 'MutexBusy')) {
+                return New-ProtocolResult $false 'MutexBusy' 'Another installer operation is running.' $null 'unchanged' 'notRequired' 'Retry after the current operation finishes.'
+            }
+            # A standard user may not be able to open a mutex created by an
+            # elevated process; that is not a busy mutex, so the elevation
+            # refusal below still decides the outcome.
+            if (Test-Administrator) { throw }
+        }
+        try {
+            # A standard user cannot mutate; refuse before touching the host.
+            if (-not (Test-Administrator)) {
+                return New-ProtocolResult $false 'UacDenied' 'This action requires the elevated broker.' $null 'unchanged' 'notRequired' 'Run it through the elevated broker.'
+            }
+            switch ($action) {
+                'Install' {
+                    $clean = $false
+                    if ($args -and $args.PSObject.Properties['mode']) { $clean = ([string]$args.mode -eq 'clean') }
+                    Install-All -Clean:$clean -DnsOnly:$DnsOnly -FailClosed:$FailClosed -AllowSeam:$AllowSeam | Out-Null
+                }
+                'Update' { Update-All -Clean:$Clean -DnsOnly:$DnsOnly -FailClosed:$FailClosed -AllowSeam:$AllowSeam | Out-Null }
+                'Pause' { Pause-All | Out-Null }
+                'Resume' { Resume-All | Out-Null }
+                'Restart' { Restart-All | Out-Null }
+                'Uninstall' { Uninstall-All | Out-Null }
+                'Purge' { $script:Purge = $true; Uninstall-All | Out-Null }
+                'SetUpstream' {
+                    if ([string]$args.mode -eq 'resetDefaults') { Set-Upstream -ResetDefaults | Out-Null }
+                    else { Set-Upstream -SelectedUpstream ([string]$args.upstreamUrl) | Out-Null }
+                }
+                'SetDns' { Set-SystemDns -Servers @($args.servers) | Out-Null }
+            }
+        } finally {
+            try { Exit-InstallerMutex } catch { }
+        }
+    } else {
+        switch ($action) {
+            'Status' { return New-ProtocolResult $true 'None' 'Status snapshot.' (Get-StatusSnapshot) }
+            'SetLanguage' {
+                $language = ''
+                if ($args -and $args.PSObject.Properties['language']) { $language = [string]$args.language }
+                if ($language -notin @('en', 'vi')) {
+                    return New-ProtocolResult $false 'Validation' 'SetLanguage requires en or vi.' $null 'unchanged' 'notRequired' 'Correct the language.'
+                }
+                Set-Language -SelectedLang $language.ToUpperInvariant() | Out-Null
+            }
+            'TestCdnOptimization' {
+                $script:CdnStructured = $true
+                try { $data = Test-CDNOptimization } finally { $script:CdnStructured = $false }
+                return New-ProtocolResult $true 'None' 'CDN test completed.' $data
+            }
+        }
+    }
+    return New-ProtocolResult $true 'None' ('Protocol action completed: ' + $action)
+}
+
+function Invoke-ProtocolLoop {
+    $script:ProtocolMode = $true
+    try { Write-ProtocolLine ([ordered]@{ type = 'hello'; protocolVersion = 1; engineVersion = $script:InstallerVersion; pid = $PID }) }
+    catch { $script:ExitCode = 2; return }
+
+    $line = $null
+    try { $line = [Console]::In.ReadLine() } catch { }
+    if ([string]::IsNullOrWhiteSpace($line)) {
+        $result = New-ProtocolResult $false 'Protocol' 'No protocol request line was received.' $null 'unknown' 'unchanged' 'Send one valid request line.'
+        try { Write-ProtocolLine $result; $script:ProtocolResultSent = $true; $script:ExitCode = 1 } catch { $script:ExitCode = 2 }
+        return
+    }
+
+    $request = $null
+    try { $request = $line | ConvertFrom-Json -ErrorAction Stop }
+    catch {
+        $result = New-ProtocolResult $false 'Protocol' ('Malformed request: ' + $_.Exception.Message) $null 'unknown' 'unchanged' 'Send one valid JSON request line.'
+        try { Write-ProtocolLine $result; $script:ProtocolResultSent = $true; $script:ExitCode = 1 } catch { $script:ExitCode = 2 }
+        return
+    }
+
+    try { $result = Invoke-ProtocolAction $request }
+    catch {
+        $result = New-ProtocolResult $false 'EngineGeneric' $_.Exception.Message $null 'unknown' 'notRequired' 'Inspect stderr and the engine transcript.'
+    }
+    try {
+        Write-ProtocolLine $result
+        $script:ProtocolResultSent = $true
+        if ($result['ok']) { $script:ExitCode = 0 } else { $script:ExitCode = 1 }
+    } catch { $script:ExitCode = 2 }
+}
+
 function Show-Menu {
     # M3: elevate once for the whole menu session.
     Ensure-Administrator
@@ -4015,22 +4467,26 @@ function Show-Menu {
 $script:ExitCode = 0
 try {
     Clear-StaleTempInstallers
-    switch ($Action) {
-        'Install' { Install-All -Clean:$Clean -DnsOnly:$DnsOnly -FailClosed:$FailClosed -AllowSeam:$AllowSeam }
-        'Update' { Update-All -Clean:$Clean -DnsOnly:$DnsOnly -FailClosed:$FailClosed -AllowSeam:$AllowSeam }
-        'Pause' { Pause-All }
-        'Resume' { Resume-All }
-        'Restart' { Restart-All }
-        'Uninstall' { Uninstall-All }
-        'Status' { Show-Status }
-        'SetUpstream' { Set-Upstream $Upstream }
-        'SetDns' { Set-SystemDns }
-        'Menu' { Show-Menu }
-        default { throw "Unknown action: $Action" }
+    if ($Protocol -eq 'jsonl') {
+        Invoke-ProtocolLoop
+    } else {
+        switch ($Action) {
+            'Install' { Install-All -Clean:$Clean -DnsOnly:$DnsOnly -FailClosed:$FailClosed -AllowSeam:$AllowSeam }
+            'Update' { Update-All -Clean:$Clean -DnsOnly:$DnsOnly -FailClosed:$FailClosed -AllowSeam:$AllowSeam }
+            'Pause' { Pause-All }
+            'Resume' { Resume-All }
+            'Restart' { Restart-All }
+            'Uninstall' { Uninstall-All }
+            'Status' { Show-Status }
+            'SetUpstream' { Set-Upstream $Upstream }
+            'SetDns' { Set-SystemDns }
+            'Menu' { Show-Menu }
+            default { throw "Unknown action: $Action" }
+        }
     }
 } catch {
     Write-Host ("ERROR: " + $_.Exception.Message) -ForegroundColor Red
-    $script:ExitCode = 1
+    if ($Protocol -eq 'jsonl' -and (-not $script:ProtocolResultSent)) { $script:ExitCode = 2 } else { $script:ExitCode = 1 }
 } finally {
     try { Stop-OpTranscript } catch { Write-Warning ('SEDG:script: Stop-OpTranscript (' + $_.Exception.Message + ')'); Write-Verbose $_ }
     try { Exit-InstallerMutex } catch { Write-Warning ('SEDG:script: Exit-InstallerMutex (' + $_.Exception.Message + ')'); Write-Verbose $_ }
@@ -4043,7 +4499,7 @@ try {
 
 # Keep a one-shot elevated window open for reading. Menu pauses itself;
 # redirected/piped runs skip this.
-if (($Action -ne 'Menu') -and (-not [Console]::IsInputRedirected)) {
+if (($Action -ne 'Menu') -and ($Protocol -ne 'jsonl') -and (-not [Console]::IsInputRedirected)) {
     Read-Host (T 'PmtContinue') | Out-Null
 }
 
