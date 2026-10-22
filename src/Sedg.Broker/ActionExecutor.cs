@@ -10,6 +10,7 @@ public sealed class ActionExecutor
 {
     private const int PostResultExitGraceMilliseconds = 30_000;
     private const int DiagnosticTailLength = 512;
+    private static readonly string PowerShellPath = ResolvePowerShellPath();
 
     private readonly string _enginePath;
     private readonly bool _validateEnginePath;
@@ -48,7 +49,7 @@ public sealed class ActionExecutor
 
             var startInfo = new ProcessStartInfo
             {
-                FileName = "powershell.exe",
+                FileName = PowerShellPath,
                 UseShellExecute = false,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
@@ -56,6 +57,7 @@ public sealed class ActionExecutor
                 CreateNoWindow = true,
                 WorkingDirectory = Path.GetDirectoryName(_enginePath) ?? string.Empty,
             };
+            startInfo.ArgumentList.Add("-NoProfile");
             startInfo.ArgumentList.Add("-ExecutionPolicy");
             startInfo.ArgumentList.Add("Bypass");
             startInfo.ArgumentList.Add("-File");
@@ -165,6 +167,18 @@ public sealed class ActionExecutor
         {
             return BrokerResults.Error(ErrorCode.EngineGeneric, exception.Message, currentState: "unknown");
         }
+    }
+
+    private static string ResolvePowerShellPath()
+    {
+        var systemDirectory = Environment.GetFolderPath(Environment.SpecialFolder.System);
+        if (string.IsNullOrWhiteSpace(systemDirectory))
+        {
+            var systemRoot = Environment.GetEnvironmentVariable("SystemRoot") ?? @"C:\Windows";
+            systemDirectory = Path.Combine(systemRoot, "System32");
+        }
+
+        return Path.Combine(systemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe");
     }
 
     private static string ReadStderr(Task<string> stderrTask)
