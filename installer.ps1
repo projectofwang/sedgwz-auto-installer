@@ -120,6 +120,7 @@ $script:ObsoleteInstallPaths = @(
 $script:DnsProxyPath = Join-Path $script:InstallPath 'dnsproxy'
 $script:ZapretPath = Join-Path $script:InstallPath 'zapret'
 $script:NssmPath = Join-Path $script:InstallPath 'nssm.exe'
+$script:ManagerPath = Join-Path $env:ProgramFiles 'SEDG Manager'
 $script:DnsBackupDir = Join-Path $env:ProgramData 'serverless-edge-dns-gateway'
 # H1: staging lives in an admin-only directory under ProgramData, never %TEMP%.
 $script:TempPath = Join-Path $script:DnsBackupDir 'staging'
@@ -155,6 +156,10 @@ $script:Sources = @{
 }
 $script:NssmVersion = '2.24'
 $script:NssmSha256 = '727d1e42275c605e0f04aba98095c38a8e1e46def453cdffce42869428aa6743'
+$script:ManagerRepository = 'projectofwang/sedgwz-auto-installer'
+$script:ManagerTag = 'v1.2.1'
+$script:ManagerAsset = 'sedg-manager-win-x64-1.2.1.zip'
+$script:ManagerSha256 = '547599627670f6f4c786870e9d49cd53cfae74f28269fddf64a43a2dde6ff065'
 $script:LangDir = Join-Path $env:APPDATA 'serverless-edge-dns-gateway'
 $script:LangFile = Join-Path $script:LangDir 'lang.txt'
 
@@ -668,7 +673,7 @@ function Test-Platform {
     }
 }
 
-$script:AllowedReleaseRepos = @('AdguardTeam/dnsproxy', 'bol-van/zapret')
+$script:AllowedReleaseRepos = @('AdguardTeam/dnsproxy', 'bol-van/zapret', 'projectofwang/sedgwz-auto-installer')
 
 function Get-ManifestProperty($ManifestObject, [string]$Name) {
     if ($null -eq $ManifestObject) { return $null }
@@ -687,9 +692,10 @@ function Assert-ManifestComponents($Manifest) {
     $requiredFields = @{
         dnsproxy = @('repository', 'tag', 'asset', 'sha256')
         zapret = @('repository', 'tag', 'asset', 'sha256')
+        manager = @('repository', 'tag', 'asset', 'sha256')
         nssm = @('version', 'asset', 'url', 'sha256')
     }
-    foreach ($componentName in @('dnsproxy', 'zapret', 'nssm')) {
+    foreach ($componentName in @('dnsproxy', 'zapret', 'manager', 'nssm')) {
         $component = Get-ManifestProperty $components $componentName
         if ($null -eq $component) { throw "Approved manifest is missing required component: $componentName." }
         foreach ($fieldName in $requiredFields[$componentName]) {
@@ -773,6 +779,12 @@ function Get-ApprovedManifest {
                 asset = 'zapret-v72.13.zip'
                 sha256 = 'c493e33a0dc4eba23a8686efdaba55f59755ad6ade3564aebd9d13f4c65e2e0c'
             }
+            manager = [pscustomobject]@{
+                repository = 'projectofwang/sedgwz-auto-installer'
+                tag = 'v1.2.1'
+                asset = 'sedg-manager-win-x64-1.2.1.zip'
+                sha256 = '547599627670f6f4c786870e9d49cd53cfae74f28269fddf64a43a2dde6ff065'
+            }
             nssm = [pscustomobject]@{
                 version = $script:NssmVersion
                 asset = 'nssm-2.24.zip'
@@ -809,9 +821,12 @@ function Get-ApprovedManifest {
             $xc = Get-ManifestProperty $xb 'components'
             $mn = Get-ManifestProperty $mc 'nssm'
             $xn = Get-ManifestProperty $xc 'nssm'
+            $mm = Get-ManifestProperty $mc 'manager'
+            $xm = Get-ManifestProperty $xc 'manager'
             foreach ($field in @(@{ P = 'installer.version'; A = $m.installer.version; B = $xb.installer.version },
                     @{ P = 'dnsproxy'; A = ($m.components.dnsproxy.tag, $m.components.dnsproxy.sha256 -join '|'); B = ($xb.components.dnsproxy.tag, $xb.components.dnsproxy.sha256 -join '|') },
                     @{ P = 'zapret'; A = ($m.components.zapret.tag, $m.components.zapret.sha256 -join '|'); B = ($xb.components.zapret.tag, $xb.components.zapret.sha256 -join '|') },
+                    @{ P = 'manager'; A = ((Get-ManifestString $mm 'repository'), (Get-ManifestString $mm 'tag'), (Get-ManifestString $mm 'asset'), (Get-ManifestString $mm 'sha256') -join '|'); B = ((Get-ManifestString $xm 'repository'), (Get-ManifestString $xm 'tag'), (Get-ManifestString $xm 'asset'), (Get-ManifestString $xm 'sha256') -join '|') },
                     @{ P = 'nssm'; A = ((Get-ManifestString $mn 'url'), (Get-ManifestString $mn 'sha256') -join '|'); B = ((Get-ManifestString $xn 'url'), (Get-ManifestString $xn 'sha256') -join '|') })) {
                 if ([string]$field.A -ne [string]$field.B) {
                     throw ("Manifest cross-check mismatch on {0}: primary {1} vs GitHub fallback. Refusing to continue." -f $field.P, $remoteUri)
@@ -830,6 +845,10 @@ function Get-ApprovedManifest {
                     $memA += ((Get-ManifestString $ca 'tag'), (Get-ManifestString $ca 'sha256') -join '|')
                     $memB += ((Get-ManifestString $cb 'tag'), (Get-ManifestString $cb 'sha256') -join '|')
                 }
+                $ma = Get-ManifestProperty (Get-ManifestProperty $m 'components') 'manager'
+                $em = Get-ManifestProperty (Get-ManifestProperty $embedded 'components') 'manager'
+                $memA += ((Get-ManifestString $ma 'repository'), (Get-ManifestString $ma 'tag'), (Get-ManifestString $ma 'asset'), (Get-ManifestString $ma 'sha256') -join '|')
+                $memB += ((Get-ManifestString $em 'repository'), (Get-ManifestString $em 'tag'), (Get-ManifestString $em 'asset'), (Get-ManifestString $em 'sha256') -join '|')
                 $na = Get-ManifestProperty (Get-ManifestProperty $m 'components') 'nssm'
                 $nb = Get-ManifestProperty (Get-ManifestProperty $embedded 'components') 'nssm'
                 $memA += ((Get-ManifestString $na 'url'), (Get-ManifestString $na 'sha256') -join '|')
@@ -1817,6 +1836,88 @@ function Install-StageNssm([string]$StageRoot, $ManifestNssm) {
     return $stageNssm
 }
 
+function Get-PinnedManagerSource($ManifestManager) {
+    # F1 pattern for the desktop app: its origin and digest are trusted only
+    # from this script. The manifest may confirm the embedded pin, never choose
+    # it: a mismatch fails closed before any download, extract, copy or run.
+    $sha = ([string]$script:ManagerSha256).Trim().ToLowerInvariant()
+    $repository = [string]$script:ManagerRepository
+    $tag = [string]$script:ManagerTag
+    $asset = [string]$script:ManagerAsset
+    if ($sha.Length -ne 64 -or $sha -notmatch '^[0-9a-f]{64}$') {
+        throw 'Embedded manager SHA-256 pin is missing or malformed; refusing to install the manager.'
+    }
+    if ($tag -notmatch '^(v)?\d+(\.\d+)*$') {
+        throw 'Embedded manager tag pin is missing or malformed; refusing to install the manager.'
+    }
+    $version = $tag -replace '^v', ''
+    if ($asset -ne ('sedg-manager-win-x64-{0}.zip' -f $version)) {
+        throw 'Embedded manager asset pin does not match the embedded tag; refusing to install the manager.'
+    }
+    if ($script:AllowedReleaseRepos -notcontains $repository) {
+        throw 'Embedded manager repository pin is not allow-listed; refusing to install the manager.'
+    }
+    if ($null -eq $ManifestManager) {
+        throw 'Approved manifest is missing the manager component; refusing to install the manager.'
+    }
+    $expected = [ordered]@{
+        repository = $repository
+        tag        = $tag
+        asset      = $asset
+        sha256     = $sha
+    }
+    foreach ($field in $expected.Keys) {
+        $actual = (Get-ManifestString $ManifestManager $field).Trim()
+        if ($field -eq 'sha256') { $actual = $actual.ToLowerInvariant() }
+        if ($actual -ne [string]$expected[$field]) {
+            throw ("Approved manifest manager.{0} does not match the embedded manager pin; refusing to download, extract or install the manager." -f $field)
+        }
+    }
+    return [pscustomobject]@{
+        Repository = $repository
+        Tag        = $tag
+        Version    = $version
+        Asset      = $asset
+        Sha256     = $sha
+    }
+}
+
+function Install-StageManager([string]$StageRoot, $ManifestManager, [switch]$AllowSeam) {
+    $pin = Get-PinnedManagerSource $ManifestManager
+    $managerUrl = Get-ReleaseAssetUrl $pin.Repository $pin.Tag $pin.Asset -AllowSeam:$AllowSeam
+    Write-Step (('Preparing SEDG Manager {0}...' -f $pin.Tag))
+    Write-Host (('  ' + (T 'LbSource') + ': ' + $managerUrl)) -ForegroundColor DarkGray
+    $managerZip = Join-Path $script:TempPath 'manager.zip'
+    Write-Host (('  ' + (T 'LbDest') + ': ' + $managerZip)) -ForegroundColor DarkGray
+    Download-File $managerUrl $managerZip
+    Write-Host (('  ' + (T 'LbSize') + ': ' + ("{0:N0}" -f (Get-Item $managerZip).Length) + ' ' + (T 'LbBytes'))) -ForegroundColor DarkGray
+    $null = Verify-Sha256 $managerZip $pin.Sha256 'SEDG Manager archive'
+    $managerExtract = Join-Path $script:TempPath 'manager'
+    Expand-Zip $managerZip $managerExtract
+    $desktopExes = @(Get-ChildItem $managerExtract -Recurse -File -Filter 'Sedg.Desktop.exe' -ErrorAction SilentlyContinue)
+    if ($desktopExes.Count -ne 1) {
+        throw ("Expected exactly one Sedg.Desktop.exe in the manager archive; found {0}." -f $desktopExes.Count)
+    }
+    $appRoot = $desktopExes[0].DirectoryName
+    foreach ($required in @('Sedg.Broker.exe', 'manager-version.txt', (Join-Path 'vi' 'Sedg.Desktop.resources.dll'))) {
+        if (-not (Test-Path -LiteralPath (Join-Path $appRoot $required) -PathType Leaf)) {
+            throw ("Manager payload is missing required file: {0}." -f $required)
+        }
+    }
+    $bundledVersion = ''
+    try {
+        $bundledVersion = ([string](Get-Content -LiteralPath (Join-Path $appRoot 'manager-version.txt') -Raw -ErrorAction Stop)).Trim()
+    } catch { Write-Verbose $_ }
+    if ($bundledVersion -ne $pin.Version) {
+        throw ("Manager payload version '{0}' does not match the pinned version '{1}'." -f $bundledVersion, $pin.Version)
+    }
+    Get-ChildItem -LiteralPath $appRoot -Force | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $StageRoot -Recurse -Force
+    }
+    Write-Done (('SEDG Manager {0} staged.' -f $pin.Tag))
+    return $StageRoot
+}
+
 function Install-StageComponents {
     param([switch]$AllowSeam)
     Write-Step 'Preparing component installation...'
@@ -1839,10 +1940,14 @@ function Install-StageComponents {
     # F1: reject a manifest whose NSSM values differ from the embedded trust
     # anchor before downloading anything, whichever origin produced it.
     $null = Get-PinnedNssmSource $manifest.components.nssm
+    # Same fail-closed check for the manager pin before any download runs.
+    $man = Get-ManifestProperty $manifest.components 'manager'
+    $null = Get-PinnedManagerSource $man
     Write-Host (('  ' + ((T 'LbApproved') -f 'installer') + ': ' + $manifest.installer.version)) -ForegroundColor DarkGray
     Write-Host (('  ' + ((T 'LbApproved') -f 'DNSProxy') + ': ' + $manifest.components.dnsproxy.tag)) -ForegroundColor DarkGray
     Write-Host (('  ' + ((T 'LbApproved') -f 'Zapret') + ': ' + $manifest.components.zapret.tag)) -ForegroundColor DarkGray
     Write-Host (('  ' + ((T 'LbApproved') -f 'NSSM') + ': ' + $manifest.components.nssm.version)) -ForegroundColor DarkGray
+    Write-Host (('  ' + ((T 'LbApproved') -f 'Manager') + ': ' + (Get-ManifestString $man 'tag'))) -ForegroundColor DarkGray
     $dnsTag = [string]$manifest.components.dnsproxy.tag
     $zapTag = [string]$manifest.components.zapret.tag
     $dnsAssetName = [string]$manifest.components.dnsproxy.asset
@@ -1907,16 +2012,24 @@ function Install-StageComponents {
     $stageNssm = Install-StageNssm $stageRoot $manifest.components.nssm
     Write-Done 'Services prepared.'
 
+    $stageManager = Join-Path $stageRoot 'manager'
+    New-Item -ItemType Directory -Path $stageManager -Force | Out-Null
+    $stageManager = Install-StageManager $stageManager $man -AllowSeam:$AllowSeam
+    Write-Done 'Manager prepared.'
+
     Write-Step 'Validating staged components...'
     Write-Host '  DNSProxy: dnsproxy.exe' -ForegroundColor DarkGray
     Write-Host '  Zapret: winws.exe, cygwin1.dll, WinDivert.dll, WinDivert64.sys' -ForegroundColor DarkGray
     Write-Host ("  NSSM: {0}" -f $stageNssm) -ForegroundColor DarkGray
+    Write-Host ("  Manager: {0}" -f $stageManager) -ForegroundColor DarkGray
     if (-not (Test-Path (Join-Path $stageDns 'dnsproxy.exe'))) { throw 'Staged dnsproxy.exe is missing.' }
     if (-not (Test-Path (Join-Path $stageZap 'winws.exe'))) { throw 'Staged winws.exe is missing.' }
     if (-not (Test-Path (Join-Path $stageZap 'cygwin1.dll'))) { throw 'Staged cygwin1.dll is missing.' }
     if (-not (Test-Path (Join-Path $stageZap 'WinDivert.dll'))) { throw 'Staged WinDivert.dll is missing.' }
     if (-not (Test-Path (Join-Path $stageZap 'WinDivert64.sys'))) { throw 'Staged WinDivert64.sys is missing.' }
     if (-not (Test-Path $stageNssm)) { throw 'Staged nssm.exe is missing.' }
+    if (-not (Test-Path (Join-Path $stageManager 'Sedg.Desktop.exe'))) { throw 'Staged Sedg.Desktop.exe is missing.' }
+    if (-not (Test-Path (Join-Path $stageManager 'Sedg.Broker.exe'))) { throw 'Staged Sedg.Broker.exe is missing.' }
 
     Write-Done 'Components validated.'
 
@@ -1926,6 +2039,7 @@ function Install-StageComponents {
         StageDns = $stageDns
         StageZap = $stageZap
         StageNssm = $stageNssm
+        StageManager = $stageManager
     }
 }
 
@@ -2049,6 +2163,79 @@ function Install-CommitComponents([hashtable]$Staged) {
             Write-Host (((T 'WarnRollback') -f $_.Exception.Message)) -ForegroundColor Yellow
         }
         throw
+    }
+}
+
+function Test-ManagerHealthy {
+    # The manager is healthy when the installed payload matches the embedded
+    # pin: version file equal to the pinned version and both executables
+    # present under %ProgramFiles%\SEDG Manager.
+    try {
+        if (Test-Path -LiteralPath (Join-Path $script:ManagerPath 'manager-version.txt') -PathType Leaf) {
+            $installedVersion = ([string](Get-Content -LiteralPath (Join-Path $script:ManagerPath 'manager-version.txt') -Raw -ErrorAction Stop)).Trim()
+            if ($installedVersion -ne ([string]$script:ManagerTag -replace '^v', '')) { return $false }
+            if (Test-Path -LiteralPath (Join-Path $script:ManagerPath 'Sedg.Desktop.exe') -PathType Leaf) {
+                if (Test-Path -LiteralPath (Join-Path $script:ManagerPath 'Sedg.Broker.exe') -PathType Leaf) { return $true }
+            }
+        }
+    } catch { Write-Verbose $_ }
+    return $false
+}
+
+function Install-CommitManager([string]$StageManager) {
+    if ([string]::IsNullOrWhiteSpace($StageManager) -or (-not (Test-Path -LiteralPath $StageManager -PathType Container))) {
+        throw 'Staged manager directory is missing.'
+    }
+    if (Test-ManagerHealthy) {
+        Write-Step 'SEDG Manager is already up to date.'
+        return
+    }
+    if (Get-Process -Name 'Sedg.Desktop' -ErrorAction SilentlyContinue) {
+        throw 'SEDG Manager is running. Close it, then run the update again.'
+    }
+    Write-Step 'Installing SEDG Manager...'
+    Write-Host (('  ' + (T 'LbTarget') + ': ' + $script:ManagerPath)) -ForegroundColor DarkGray
+    $rollbackRoot = Join-Path $script:TempPath 'rollback\manager'
+    if (Test-Path $rollbackRoot) {
+        Remove-Item $rollbackRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    New-Item -ItemType Directory -Path $rollbackRoot -Force | Out-Null
+    $managerRollback = Join-Path $rollbackRoot 'sedg-manager'
+    $hadOld = Test-Path -LiteralPath $script:ManagerPath
+    $moved = $false
+    try {
+        if ($hadOld) {
+            Move-Item -LiteralPath $script:ManagerPath -Destination $managerRollback -ErrorAction Stop
+            $moved = $true
+        }
+        New-Item -ItemType Directory -Path $script:ManagerPath -Force | Out-Null
+        Get-ChildItem -LiteralPath $StageManager -Force | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination $script:ManagerPath -Recurse -Force
+        }
+        Set-SecureAcl $script:ManagerPath
+        if (-not (Test-ManagerHealthy)) { throw 'Live SEDG Manager commit failed verification.' }
+        Write-Done ('SEDG Manager {0} installed.' -f ([string]$script:ManagerTag -replace '^v', ''))
+    } catch {
+        Write-Host (('  ' + (T 'WarnRollingBack'))) -ForegroundColor Yellow
+        try {
+            if ($moved) {
+                if (Test-Path -LiteralPath $script:ManagerPath) {
+                    Remove-Item -LiteralPath $script:ManagerPath -Recurse -Force -ErrorAction SilentlyContinue
+                }
+                if (Test-Path -LiteralPath $managerRollback) {
+                    Move-Item -LiteralPath $managerRollback -Destination $script:ManagerPath -Force -ErrorAction Stop
+                }
+            } elseif (-not $hadOld -and (Test-Path -LiteralPath $script:ManagerPath)) {
+                # No previous manager: remove only the partial new tree.
+                Remove-Item -LiteralPath $script:ManagerPath -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        } catch {
+            Write-Host (((T 'WarnRollback') -f $_.Exception.Message)) -ForegroundColor Yellow
+        }
+        throw
+    }
+    if (Test-Path $managerRollback) {
+        try { Remove-Item $managerRollback -Recurse -Force -ErrorAction SilentlyContinue } catch { Write-Verbose $_ }
     }
 }
 
@@ -3183,6 +3370,11 @@ function Install-All {
     param([switch]$Clean, [switch]$DnsOnly, [switch]$FailClosed, [switch]$AllowSeam)
     Ensure-Administrator
     Test-Platform
+    # Refuse before touching the engine when the manager needs replacing but
+    # is running. Install-CommitManager repeats this guard for start-after-check.
+    if ((-not (Test-ManagerHealthy)) -and (Get-Process -Name 'Sedg.Desktop' -ErrorAction SilentlyContinue)) {
+        throw 'SEDG Manager is running. Close it, then run this action again.'
+    }
     # F4: refuse to install over a tree that a pending reboot will delete
     # (scheduled by a previous Uninstall via MoveFileEx).
     if (Test-PendingRebootDelete $script:InstallPath) {
@@ -3284,6 +3476,7 @@ function Install-All {
 
         Reset-DnsToDhcp
         Install-CommitComponents $staged
+        Install-CommitManager $staged.StageManager
         $preservedBack = Join-Path $preserveDir 'config.yaml'
         if (Test-Path -LiteralPath $preservedBack -PathType Leaf) {
             Copy-Item -LiteralPath $preservedBack -Destination $script:ConfigFile -Force
@@ -3359,6 +3552,11 @@ function Update-All {
     param([switch]$Clean, [switch]$DnsOnly, [switch]$FailClosed, [switch]$AllowSeam)
     Ensure-Administrator
     Test-Platform
+    # Same pre-mutation guard as Install-All: an outdated running manager
+    # cannot be replaced, so refuse before the engine is touched.
+    if ((-not (Test-ManagerHealthy)) -and (Get-Process -Name 'Sedg.Desktop' -ErrorAction SilentlyContinue)) {
+        throw 'SEDG Manager is running. Close it, then run this action again.'
+    }
     Enter-InstallerMutex
     Start-OpTranscript 'Update'
     try {
@@ -3388,7 +3586,8 @@ function Update-All {
             $cur0 = Get-StateReleases
             if (($cur0[0] -eq [string]$m0.components.dnsproxy.tag) -and
                 ($cur0[1] -eq [string]$m0.components.zapret.tag) -and
-                (Test-LiveBinariesHealthy)) {
+                (Test-LiveBinariesHealthy) -and
+                (Test-ManagerHealthy)) {
                 $earlySkip = $true
             }
         } catch { $earlySkip = $false }
@@ -3413,7 +3612,8 @@ function Update-All {
         $curRel = Get-StateReleases
         if (($curRel[0] -eq $staged.DnsRelease) -and
             ($curRel[1] -eq $staged.ZapRelease) -and
-            (Test-LiveBinariesHealthy)) {
+            (Test-LiveBinariesHealthy) -and
+            (Test-ManagerHealthy)) {
             $skipCommit = $true
         }
     }
@@ -3430,6 +3630,7 @@ function Update-All {
             # H3: no reboot-scheduling on Update; locked driver aborts loudly.
             Remove-OwnWinDivertDriver
             Install-CommitComponents $staged
+            Install-CommitManager $staged.StageManager
         }
         Write-Host (('  ' + (T 'InfoPreserveConfig'))) -ForegroundColor DarkGray
         Ensure-Config
@@ -3583,6 +3784,8 @@ function Uninstall-All {
     }
 
     if ($installed) {
+        # O-9: %ProgramFiles%\SEDG Manager keeps an independent lifecycle.
+        # Uninstalling the gateway must not remove the manager app.
         # Prefer a synchronous removal so success is verified. Fall back to a
         # scheduled async removal only when files are still locked (e.g. the
         # manager script itself is running from the install directory).

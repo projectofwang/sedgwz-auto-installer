@@ -8,6 +8,8 @@
     each archive opens and contains the expected runtime, then writes both the
     JSON manifest and the matching embedded copy in Get-ApprovedManifest.
     Run with -SkipDownload to only re-sync the embedded copy from the JSON.
+    -ManagerTag/-ManagerAsset/-ManagerSha256 update the local manager pin
+    without a download (all three together).
     After changing component versions, bump $script:InstallerVersion in
     installer.ps1 AND installer.version in approved-releases.json together.
 #>
@@ -16,6 +18,9 @@ param(
     [string]$ZapretTag = '',
     [string]$NssmVersion = '',
     [string]$NssmUrl = '',
+    [string]$ManagerTag = '',
+    [string]$ManagerAsset = '',
+    [string]$ManagerSha256 = '',
     [switch]$SkipDownload
 )
 
@@ -58,7 +63,9 @@ try {
         return $Text.Replace($Old, $New)
     }
 
-    $manifest = Get-Content -LiteralPath $manifestPath -Raw -ErrorAction Stop | ConvertFrom-Json
+    $manifestText = Get-Content -LiteralPath $manifestPath -Raw -ErrorAction Stop
+    $manifestNewline = if ($manifestText -match "`r`n") { "`r`n" } else { "`n" }
+    $manifest = $manifestText | ConvertFrom-Json
     if ($manifest.schema -ne 1 -or $manifest.policy -ne 'approved-only') {
         throw 'Manifest schema/policy is not approved-only schema 1.'
     }
@@ -98,11 +105,36 @@ try {
         }
     }
 
+    # The manager pin is local (no upstream download): these parameters update
+    # it even with -SkipDownload. The repository is fixed to this project.
+    $mgr = $manifest.components.manager
+    if ($null -eq $mgr) { throw 'Manifest is missing the manager component.' }
+    if ([string]$mgr.repository -ne 'projectofwang/sedgwz-auto-installer') {
+        throw 'Manifest manager.repository must be projectofwang/sedgwz-auto-installer.'
+    }
+    $managerValues = @(@($ManagerTag, $ManagerAsset, $ManagerSha256) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($managerValues.Count -gt 0 -and $managerValues.Count -lt 3) {
+        throw 'Provide -ManagerTag, -ManagerAsset and -ManagerSha256 together.'
+    }
+    if ($managerValues.Count -eq 3) {
+        if ($ManagerTag -notmatch '^(v)?\d+(\.\d+)*$') { throw "Invalid manager tag: $ManagerTag" }
+        $managerVersion = $ManagerTag -replace '^v', ''
+        if ($ManagerAsset -ne ('sedg-manager-win-x64-{0}.zip' -f $managerVersion)) {
+            throw "Manager asset must be sedg-manager-win-x64-$managerVersion.zip."
+        }
+        if ($ManagerSha256 -notmatch '^[0-9a-fA-F]{64}$') { throw "Invalid manager SHA-256: $ManagerSha256" }
+        $mgr.tag = $ManagerTag
+        $mgr.asset = $ManagerAsset
+        $mgr.sha256 = $ManagerSha256.ToLowerInvariant()
+        Write-Host "manager $ManagerTag sha256=$($mgr.sha256)"
+    }
+
     # Canonical JSON layout. Preserve an existing optional nssm mirror so a
     # re-run never silently drops it.
     $d = $manifest.components.dnsproxy
     $z = $manifest.components.zapret
     $n = $manifest.components.nssm
+    $mgrLine = ('    "manager": {{"repository":"{0}","tag":"{1}","asset":"{2}","sha256":"{3}"}},' -f $mgr.repository, $mgr.tag, $mgr.asset, $mgr.sha256)
     $existingMirror = ''
     try {
         $mirrorProp = $n.PSObject.Properties['mirror']
@@ -120,11 +152,12 @@ try {
         '  "components": {',
         ('    "dnsproxy": {{"repository":"{0}","tag":"{1}","asset":"{2}","sha256":"{3}"}},' -f $d.repository, $d.tag, $d.asset, $d.sha256),
         ('    "zapret": {{"repository":"{0}","tag":"{1}","asset":"{2}","sha256":"{3}"}},' -f $z.repository, $z.tag, $z.asset, $z.sha256),
+        $mgrLine,
         $nssmLine,
         '  }',
         '}'
-    ) -join "`r`n"
-    $json = $json + "`r`n"
+    ) -join $manifestNewline
+    $json = $json + $manifestNewline
     [IO.File]::WriteAllText($manifestPath, $json, [Text.UTF8Encoding]::new($false))
     Write-Host "Wrote: $manifestPath"
 
@@ -151,6 +184,12 @@ try {
         ("                asset = '{0}'" -f $z.asset),
         ("                sha256 = '{0}'" -f $z.sha256),
         '            }',
+        '            manager = [pscustomobject]@{',
+        ("                repository = '{0}'" -f $mgr.repository),
+        ("                tag = '{0}'" -f $mgr.tag),
+        ("                asset = '{0}'" -f $mgr.asset),
+        ("                sha256 = '{0}'" -f $mgr.sha256),
+        '            }',
         '            nssm = [pscustomobject]@{',
         '                version = $script:NssmVersion',
         "                asset = 'nssm-$($n.version).zip'",
@@ -161,6 +200,20 @@ try {
         '    }'
     ) -join "`r`n"
     $installer = $installer.Substring(0, $blockMatch.Index) + $newBlock + $installer.Substring($blockMatch.Index + $blockMatch.Length)
+
+    # The manager pin lives in script variables for Get-PinnedManagerSource;
+    # the embedded block above carries the same values as literals.
+    $oldMgrRepo = [regex]::Match($installer, '(?m)^\$script:ManagerRepository = ''([^'']+)''\r?$')
+    $oldMgrTag = [regex]::Match($installer, '(?m)^\$script:ManagerTag = ''([^'']+)''\r?$')
+    $oldMgrAsset = [regex]::Match($installer, '(?m)^\$script:ManagerAsset = ''([^'']+)''\r?$')
+    $oldMgrSha = [regex]::Match($installer, '(?m)^\$script:ManagerSha256 = ''([^'']+)''\r?$')
+    if (-not ($oldMgrRepo.Success -and $oldMgrTag.Success -and $oldMgrAsset.Success -and $oldMgrSha.Success)) {
+        throw 'Manager script lines not found in installer.ps1.'
+    }
+    $installer = Set-UniqueReplace $installer $oldMgrRepo.Value ("`$script:ManagerRepository = '$($mgr.repository)'") '$script:ManagerRepository'
+    $installer = Set-UniqueReplace $installer $oldMgrTag.Value ("`$script:ManagerTag = '$($mgr.tag)'") '$script:ManagerTag'
+    $installer = Set-UniqueReplace $installer $oldMgrAsset.Value ("`$script:ManagerAsset = '$($mgr.asset)'") '$script:ManagerAsset'
+    $installer = Set-UniqueReplace $installer $oldMgrSha.Value ("`$script:ManagerSha256 = '$($mgr.sha256)'") '$script:ManagerSha256'
 
     if (-not [string]::IsNullOrWhiteSpace($NssmVersion)) {
         # Embedded nssm resolves through script variables: update them too.
