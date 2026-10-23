@@ -68,11 +68,27 @@ public sealed class PipeClient : IDisposable
 
     public void Dispose()
     {
-        _writer?.Dispose();
-        _reader?.Dispose();
-        _pipe?.Dispose();
+        // A client that disconnects first can break the pipe; disposing is best effort so a normal
+        // session still exits 0 instead of surfacing the broken pipe as an engine error.
+        DisposeBestEffort(_writer);
+        DisposeBestEffort(_reader);
+        DisposeBestEffort(_pipe);
         _writer = null;
         _reader = null;
         _pipe = null;
+    }
+
+    private static void DisposeBestEffort(IDisposable? disposable)
+    {
+        try
+        {
+            disposable?.Dispose();
+        }
+        catch (IOException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
     }
 }
