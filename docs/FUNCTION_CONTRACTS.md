@@ -67,7 +67,7 @@ Gộp từ 5 lanes (số dòng grep-verify 2026-10-11; cập nhật tổng dòng
 
 ## F. Desktop-manager delivery functions (Tasks 1–6; grep-verify 2026-10-23)
 
-Các hàm mới so với base `a834a44`; số dòng hiện tại của `installer.ps1` là **4.717**. Manager pin: repository `projectofwang/sedgwz-auto-installer`, tag `v1.2.1`, asset `sedg-manager-win-x64-1.2.1.zip`, SHA-256 `547599...ff065`, app path `%ProgramFiles%\SEDG Manager`.
+Các hàm mới so với base `a834a44`; số dòng hiện tại của `installer.ps1` là **4.717**. Manager pin: repository `projectofwang/sedgwz-auto-installer`, tag `v1.2.2`, asset `sedg-manager-win-x64-1.2.2.zip`, SHA-256 `d9f9df...acac4`, app path `%ProgramFiles%\SEDG Manager`.
 
 - `Get-PinnedManagerSource` (1839): đọc manager pin từ manifest/embedded theo cùng validate path; trả source cho staging; không nhận hash từ app.
 - `Install-StageManager` (1885): tải pinned zip vào staging admin-only → `Verify-Sha256` trước khi extract/write; fail → không chạm app path; `-AllowSeam` chỉ theo seam hiện có.

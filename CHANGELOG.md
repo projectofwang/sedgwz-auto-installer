@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-10-24
+
+- Bump InstallerVersion 1.2.1 -> 1.2.2 and pin SEDG Manager
+  `sedg-manager-win-x64-1.2.2.zip` (self-contained `win-x64`).
+- Fix Desktop Manager shell visibility bindings so only one view renders
+  at a time (`50c1e31`).
+- No engine behavior change.
+
 ## [1.2.1] - 2026-10-11
 
 - Bump InstallerVersion 1.2.0 -> 1.2.1 (`installer.ps1` +
