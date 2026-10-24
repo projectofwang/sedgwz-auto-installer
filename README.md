@@ -85,11 +85,10 @@ bundled), per Gate 1 decision O-6. `tools/Publish-Manager.ps1
 -FrameworkDependent` is a development option only.
 
 > **Manager release status:** the manager is pinned in
-> `approved-releases.json` as `sedg-manager-win-x64-1.2.4.zip`. The exact pinned
-> asset must be uploaded to the GitHub release before a fresh install can stage
-> it; until then the engine fails closed at the manager stage. The desktop
-> manager is implemented but not integration-accepted: elevated UAC, broker,
-> DNS, service, driver, and watchdog end-to-end evidence is still pending.
+> `approved-releases.json` as `sedg-manager-win-x64-1.2.5.zip`, published on the
+> bare `1.2.5` release tag because releases are immutable. The desktop manager
+> is implemented but not integration-accepted: elevated UAC, broker, DNS,
+> service, driver, and watchdog end-to-end evidence is still pending.
 
 ## Usage
 
@@ -323,6 +322,9 @@ Static hosting and deployment details are described in
 - Gateway uninstall does not remove `%ProgramFiles%\SEDG Manager` (O-9).
 - The release workflow builds the assets, generates `version.json` and
   `SHA256SUMS`, and publishes the release.
+- Releases are immutable: assets must be attached at creation. The installer
+  release stays `vX.Y.Z`; the locally built, non-reproducible manager artifact
+  is published on a bare `X.Y.Z` release, which `$script:ManagerTag` accepts.
 - A scheduled workflow runs every Monday at 02:00 UTC, checks the pinned
   upstream component versions, and opens a pull request when a new version is
   available.

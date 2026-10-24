@@ -2,16 +2,25 @@
 
 ## [Unreleased]
 
+## [1.2.5] - 2026-10-24
+
+- Publish the pinned SEDG Manager artifact on a bare `1.2.5` release tag:
+  GitHub releases are immutable, so the `vX.Y.Z` workflow release cannot accept
+  the locally built, non-reproducible archive after publication.
+- Bump InstallerVersion 1.2.4 -> 1.2.5. Contains the 1.2.4 protocol fix below.
+
 ## [1.2.4] - 2026-10-24
 
+- Tagged, not released: the release could not carry the manager asset and
+  immutable releases refuse later uploads. Superseded by 1.2.5.
 - Decode protocol stdin as UTF-8 in `-Protocol jsonl`, so the engine no longer
   rejects every request when the host console uses an OEM code page (the CI
   runner decodes the pipe as IBM437). The existing BOM strip stays.
 - Write protocol stdin as UTF-8 without BOM from the Desktop Manager and broker.
 - Bump InstallerVersion 1.2.3 -> 1.2.4 and pin SEDG Manager
   `sedg-manager-win-x64-1.2.4.zip` (self-contained `win-x64`).
-- Supersedes v1.2.3, which was tagged but never released: stripping the BOM
-  alone did not cover an OEM-code-page decoder.
+  (This entry also covers v1.2.3, which was tagged but never released:
+  stripping the BOM alone did not cover an OEM-code-page decoder.)
 
 ## [1.2.3] - 2026-10-24
 

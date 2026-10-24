@@ -85,9 +85,8 @@ theo quyet dinh Gate 1 O-6. `tools/Publish-Manager.ps1 -FrameworkDependent` chi
 la lua chon cho dev.
 
 > **Trang thai manager release:** manager duoc ghim trong
-> `approved-releases.json` la `sedg-manager-win-x64-1.2.4.zip`. Asset ghim
-> chinh xac phai duoc upload len GitHub release truoc khi fresh install co the
-> stage; den luc do engine fail closed tai manager stage. Desktop manager da
+> `approved-releases.json` la `sedg-manager-win-x64-1.2.5.zip`, phat hanh tren
+> tag release tran `1.2.5` vi release la immutable. Desktop manager da
 > implement nhung chua integration-accepted: UAC, broker, DNS, service, driver,
 > watchdog end-to-end van chua co evidence.
 
