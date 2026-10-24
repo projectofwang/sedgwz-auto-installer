@@ -11,15 +11,24 @@ This repo sets up Windows the same way every time: it downloads pinned release
 components, installs them in a fixed folder, registers them as Windows
 services, and keeps DNS working with a scheduled watchdog task.
 
-The installer script (`installer.ps1`) does everything through one `-Action`
-parameter. You can use it from the menu or from the command line. All
-component versions are pinned in
-[`approved-releases.json`](approved-releases.json).
+On Windows 11 x64, the **SEDG Desktop Manager** is the primary management
+surface: status, DNS upstream, service control, logs, and update/uninstall. The
+installer script (`installer.ps1`) remains the bootstrap and the `-Action` CLI
+for automation and recovery. All component versions are pinned in
+[`approved-releases.json`](approved-releases.json), including the manager asset.
+
+The engine installs the manager under `%ProgramFiles%\SEDG Manager` and does not
+remove it when the gateway is uninstalled (O-9: the manager has an independent
+lifecycle). `Gateway-Manager.bat` in the engine folder remains the
+one-release-cycle rollback path to the console menu if the GUI cannot start.
 
 ## Features
 
+- **SEDG Desktop Manager** (.NET 10 WinForms): status, upstream, service
+  control, logs, update/uninstall; a separate elevated broker handles privileged
+  actions, and the GUI itself stays unprivileged.
 - One-line install, update, pause, resume, restart, status, and uninstall actions.
-- Menu-driven launcher (`Gateway-Manager.bat`, created in the install folder)
+- Console rollback path (`Gateway-Manager.bat`, created in the install folder)
   that self-elevates to administrator.
 - DNS service (dnsproxy) with selectable upstream presets or a custom DoH/DoT/DoH3/DoQ endpoint.
 - Traffic-routing service (winws) with an editable argument file and an optional domain blacklist.
@@ -35,16 +44,22 @@ component versions are pinned in
 
 Requirements checked by the installer (`installer.ps1`):
 
-- Windows 10 version 1803 (build 17134) or newer.
-- 64-bit Windows on x64; ARM64 is rejected.
-- Windows PowerShell 5.1 or newer.
-- Administrator privileges (the launcher and script elevate automatically).
+- Engine: Windows 10 version 1803 (build 17134) or newer, 64-bit x64; ARM64 is rejected by the engine.
+- Desktop Manager GUI: Windows 11 x64 only. Windows 10 and ARM64 are **not**
+  supported GUI targets. This is an observed compatibility statement, not a
+  claim of Microsoft support.
+- The published manager is self-contained `win-x64` (the .NET 10 runtime is
+  bundled), so no separate .NET install is required.
+- Windows PowerShell 5.1 or newer for the engine.
+- Administrator privileges (the launcher and script elevate automatically; the
+  GUI asks the broker for privileged actions).
 - Outbound HTTPS access to the release endpoints listed in
   [`approved-releases.json`](approved-releases.json).
 
 ## Install
 
-Run in an elevated PowerShell:
+On Windows 11 x64, install once with the published one-line bootstrap. It
+installs the engine and the Desktop Manager. Run in an elevated PowerShell:
 
 ```powershell
 irm https://dl.taiyuanwangjie.dpdns.org/installer.ps1 | iex
@@ -59,9 +74,28 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\installer.ps1 -Action Inst
 
 The default installation directory is `C:\serverless-edge-dns-gateway`. The
 install registers two services (`winws-service`, `dnsproxy-service`) and one
-scheduled task (`SEDG-DNS-Watchdog`).
+scheduled task (`SEDG-DNS-Watchdog`). It also installs the manager under
+`%ProgramFiles%\SEDG Manager` and adds a Start-menu entry. Open **SEDG Manager**
+after install; it is the primary management surface.
+`Gateway-Manager.bat` in the engine folder remains the one-release-cycle
+rollback path to the console menu.
+
+The published manager is self-contained `win-x64` (the .NET 10 runtime is
+bundled), per Gate 1 decision O-6. `tools/Publish-Manager.ps1
+-FrameworkDependent` is a development option only.
+
+> **Manager release status:** the manager is pinned in
+> `approved-releases.json` as `sedg-manager-win-x64-1.2.1.zip`. The exact pinned
+> asset must be uploaded to the GitHub release before a fresh install can stage
+> it; until then the engine fails closed at the manager stage. The desktop
+> manager is implemented but not integration-accepted: elevated UAC, broker,
+> DNS, service, driver, and watchdog end-to-end evidence is still pending.
 
 ## Usage
+
+The Desktop Manager exposes the same operations through its windows; the
+command line below remains for automation, recovery, and the
+`Gateway-Manager.bat` rollback path.
 
 Command line:
 
@@ -226,7 +260,20 @@ Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error -ExcludeRule PSAvoidUsing
 
 # Re-sync the embedded fallback manifest from approved-releases.json
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-Manifest.ps1 -SkipDownload
+
+# Build the .NET solution and run the zero-dependency unit harness
+dotnet build src/sedg-manager.sln -c Release
+dotnet run --project tests/Sedg.UnitTests -c Release
+
+# Publish the manager (self-contained is the release mode; framework-dependent is for local dev)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Publish-Manager.ps1 -SelfContained
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Publish-Manager.ps1 -FrameworkDependent
 ```
+
+CI runs the baseline PowerShell, ASCII, PSScriptAnalyzer, Pester, manifest/EN-VI
+parity, and Cloudflare gates, plus a `windows-latest` .NET job that builds the
+solution and runs the 103-case harness. The manifest gate also checks the
+`manager` repository/tag/asset/SHA and its embedded `$script:Manager*` pins.
 
 ### Integration smoke (CI)
 
@@ -240,8 +287,14 @@ installer's `SEDG_INSTALL_PATH` / `SEDG_MANIFEST_URL` / `SEDG_ASSET_BASE_URL`
 seams keep the run isolated, and per-file SHA-256 verification stays
 enforced throughout.
 
+The fixture builder currently creates dnsproxy/zapret/NSSM stubs and does not
+include the manager component or a manager asset. The scheduled smoke will fail
+at the engine's required-manager check until that fixture is extended; the
+desktop manager remains integration-unverified.
+
 `tools/Update-Manifest.ps1` accepts `-DnsproxyTag`, `-ZapretTag`,
-`-NssmVersion`, `-NssmUrl`, and `-SkipDownload`. Check
+`-NssmVersion`, `-NssmUrl`, `-ManagerTag`, `-ManagerAsset`,
+`-ManagerSha256`, and `-SkipDownload`. Check
 [`approved-releases.json`](approved-releases.json) for the current pinned
 values instead of copying version numbers from this document.
 
@@ -261,6 +314,13 @@ Static hosting and deployment details are described in
 
 - Releases are created from `vX.Y.Z` tags; the tag must match the installer
   version declared in `installer.ps1`, otherwise the workflow fails.
+- The manager is published self-contained `win-x64` (O-6) as
+  `sedg-manager-win-x64-X.Y.Z.zip`; `approved-releases.json` and the embedded
+  `$script:Manager*` pins must use that exact tag/asset/SHA. A rebuild is not
+  byte-reproducible, so upload the pinned artifact, not a fresh build. The
+  plan's Task 8 criterion-6 wording conflicts with O-6; the discrepancy is
+  recorded in [`codemap.md`](codemap.md).
+- Gateway uninstall does not remove `%ProgramFiles%\SEDG Manager` (O-9).
 - The release workflow builds the assets, generates `version.json` and
   `SHA256SUMS`, and publishes the release.
 - A scheduled workflow runs every Monday at 02:00 UTC, checks the pinned
@@ -277,13 +337,19 @@ Static hosting and deployment details are described in
 |-- .github/
 |   `-- workflows/          CI, release, and component-watch workflows
 |-- cloudflare/             Static assets-only channel (no Worker script), build script, deployment docs
-|-- tests/                  Pester test suite
+|-- src/                    .NET 10 manager solution
+|   |-- Sedg.Desktop/       WinForms management surface
+|   |-- Sedg.Broker/        Elevated broker and pipe protocol host
+|   `-- Sedg.Protocol/      Shared request/response schema
+|-- tests/                  Pester and .NET test suites
+|   |-- Sedg.UnitTests/     Zero-dependency .NET unit harness
 |   |-- Installer.Logic.Tests.ps1
 |   |-- Installer.Maintain.Tests.ps1
 |   `-- integration/        Elevated end-to-end smoke (Invoke-Smoke.ps1, Build-Fixtures.ps1)
 |-- docs/                   Function contracts, security audit, upstream design
 |-- tools/
-|   `-- Update-Manifest.ps1 Regenerates approved-releases.json
+|   |-- Update-Manifest.ps1 Regenerates approved-releases.json and embedded pins
+|   `-- Publish-Manager.ps1 Publishes the win-x64 manager
 |-- approved-releases.json  Pinned component versions and manifest URLs
 |-- installer.ps1           Installer, menu, services, and watchdog logic
 |-- package.json            Build, deploy, and test scripts

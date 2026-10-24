@@ -11,16 +11,26 @@ Kho luu tru nay cai dat Windows theo mot cach moi lan: tai cac thanh phan
 da ghim phien ban, cai dat vao thu muc co dinh, dang ky chung thanh dich vu
 Windows, va giu DNS hoat dong qua mot task watchdog theo lich.
 
-Trinh cai dat (`installer.ps1`) lam moi viec thong qua mot tham so
-`-Action`. Ban co the dung qua menu hoac qua dong lenh. Tat ca phien ban thanh phan
-duoc ghim trong [`approved-releases.json`](approved-releases.json).
+Tren Windows 11 x64, **SEDG Desktop Manager** la management surface chinh:
+trang thai, DNS upstream, dich vu, log, cap nhat/go cai dat. Trinh cai dat
+(`installer.ps1`) van la bootstrap va CLI `-Action` cho automation va recovery.
+Tat ca phien ban thanh phan duoc ghim trong
+[`approved-releases.json`](approved-releases.json), gom ca manager.
+
+Engine cai manager vao `%ProgramFiles%\SEDG Manager` va khong xoa manager khi
+go gateway (O-9: manager co lifecycle rieng). `Gateway-Manager.bat` trong thu
+muc engine van la rollback path mot chu ky phat hanh ve menu console neu GUI
+khong khoi dong duoc.
 
 ## Tinh nang
 
+- **SEDG Desktop Manager** (.NET 10 WinForms): trang thai, upstream, dich vu,
+  log, cap nhat/go cai dat; broker rieng xu ly thao tac can quyen, GUI khong
+  giu dac quyen.
 - Cai dat, cap nhat, tam dung, tiep tuc, khoi dong lai, xem trang thai, va gho
   bo mot dong lenh.
-- Menu quan ly (`Gateway-Manager.bat`, duoc tao trong thu muc cai dat) tu dong
-  nang quyen len administrator.
+- Console rollback (`Gateway-Manager.bat`, duoc tao trong thu muc cai dat) tu
+  dong nang quyen len administrator.
 - Dich vu DNS (dnsproxy) voi cac upstream san hoac URL DoH/DoT/DoH3/DoQ tuy chinh.
 - Dich vu dieu khien luu trinh (winws) voi file tham so va danh sach domain tuy chinh.
 - Task watchdog chay moi phut va khoi phuc DNS theo DHCP sau 3 loi lien tiep
@@ -35,16 +45,22 @@ duoc ghim trong [`approved-releases.json`](approved-releases.json).
 
 Cac yeu cau duoc trinh cai dat kiem tra (`installer.ps1`):
 
-- Windows 10 phien ban 1803 (build 17134) tro len.
-- Windows 64-bit tren kieu x64; ARM64 bi tu choi.
-- Windows PowerShell 5.1 tro len.
-- Quyen administrator (launcher va script tu nang quyen).
+- Engine: Windows 10 phien ban 1803 (build 17134) tro len, 64-bit x64; ARM64
+  bi engine tu choi.
+- Desktop Manager GUI: chi Windows 11 x64. Windows 10 va ARM64 **khong** phai
+  GUI target. Day la observed compatibility, khong phai claim Microsoft support.
+- Manager da publish la self-contained `win-x64` (.NET 10 runtime duoc dong
+  goi), khong can cai .NET rieng.
+- Windows PowerShell 5.1 tro len cho engine.
+- Quyen administrator (launcher va script tu nang quyen; GUI hoi broker cho
+  thao tac can quyen).
 - Ket noi HTTPS toi cac endpoint phat hanh ghi trong
   [`approved-releases.json`](approved-releases.json).
 
 ## Cai dat
 
-Chay trong PowerShell voi quyen administrator:
+Tren Windows 11 x64, cai mot lan bang one-line bootstrap. Lenh nay cai engine
+va Desktop Manager. Chay trong PowerShell voi quyen administrator:
 
 ```powershell
 irm https://dl.taiyuanwangjie.dpdns.org/installer.ps1 | iex
@@ -59,9 +75,26 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\installer.ps1 -Action Inst
 
 Thu muc cai dat mac dinh la `C:\serverless-edge-dns-gateway`. Qua trinh cai dat
 dang ky hai dich vu (`winws-service`, `dnsproxy-service`) va mot scheduled task
-(`SEDG-DNS-Watchdog`).
+(`SEDG-DNS-Watchdog`). Manager duoc cai vao `%ProgramFiles%\SEDG Manager` va co
+Start-menu entry. Mo **SEDG Manager** sau khi cai; day la management surface
+chinh. `Gateway-Manager.bat` trong thu muc engine van la rollback path mot chu
+ky phat hanh ve menu console.
+
+Manager da publish la self-contained `win-x64` (.NET 10 runtime duoc dong goi),
+theo quyet dinh Gate 1 O-6. `tools/Publish-Manager.ps1 -FrameworkDependent` chi
+la lua chon cho dev.
+
+> **Trang thai manager release:** manager duoc ghim trong
+> `approved-releases.json` la `sedg-manager-win-x64-1.2.1.zip`. Asset ghim
+> chinh xac phai duoc upload len GitHub release truoc khi fresh install co the
+> stage; den luc do engine fail closed tai manager stage. Desktop manager da
+> implement nhung chua integration-accepted: UAC, broker, DNS, service, driver,
+> watchdog end-to-end van chua co evidence.
 
 ## Su dung
+
+Desktop Manager cung cap cac thao tac tuong tu qua cua so; dong lenh ben duoi
+van danh cho automation, recovery, va rollback path `Gateway-Manager.bat`.
 
 Dong lenh:
 
@@ -222,12 +255,29 @@ Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error -ExcludeRule PSAvoidUsing
 
 # Dong lai manifest ghep tu approved-releases.json
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-Manifest.ps1 -SkipDownload
+
+# Build .NET solution va chay unit harness
+dotnet build src/sedg-manager.sln -c Release
+dotnet run --project tests/Sedg.UnitTests -c Release
+
+# Publish manager (self-contained la release mode; framework-dependent cho dev)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Publish-Manager.ps1 -SelfContained
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Publish-Manager.ps1 -FrameworkDependent
 ```
 
+CI chay cac gate PowerShell, ASCII, PSScriptAnalyzer, Pester, manifest/EN-VI
+parity, Cloudflare, va them job .NET tren `windows-latest` build solution +
+chay harness 103 case. Gate manifest cung kiem tra `manager`
+repository/tag/asset/SHA va embedded `$script:Manager*`.
+
 `tools/Update-Manifest.ps1` nhan `-DnsproxyTag`, `-ZapretTag`, `-NssmVersion`,
-`-NssmUrl`, va `-SkipDownload`. Hay xem
-[`approved-releases.json`](approved-releases.json) cho cac phien ban hien tai
-thay vi sao chep so phien ban tu tai lieu nay.
+`-NssmUrl`, `-ManagerTag`, `-ManagerAsset`, `-ManagerSha256`, va
+`-SkipDownload`. Hay xem [`approved-releases.json`](approved-releases.json) cho
+cac phien ban hien tai thay vi sao chep so phien ban tu tai lieu nay.
+
+Integration smoke tao fixture dnsproxy/zapret/NSSM nhung chua co manager
+component/asset. Smoke theo lich se fail tai required-manager check cho den khi
+fixture duoc mo rong; desktop manager chua duoc integration-accepted.
 
 Tai san Worker / frontend:
 
@@ -245,6 +295,13 @@ Chi tiet trien khai va hosting static duoc mo ta trong
 
 - Phat hanh duoc tao tu tag `vX.Y.Z`; tag phai khop voi phien ban trinh cai dat
   khai bao trong `installer.ps1`, nguoc lai workflow that bai.
+- Manager duoc publish self-contained `win-x64` (O-6) thanh
+  `sedg-manager-win-x64-X.Y.Z.zip`; `approved-releases.json` va embedded
+  `$script:Manager*` phai dung tag/asset/SHA do. Rebuild khong byte-reproducible,
+  nen upload dung artifact da pin, khong phai build moi. Cau chu criterion 6 cua
+  plan Task 8 xung dot voi O-6; discrepancy duoc ghi trong
+  [`codemap.md`](codemap.md).
+- Go gateway khong xoa `%ProgramFiles%\SEDG Manager` (O-9).
 - Workflow phat hanh build tai asset, tao `version.json` va `SHA256SUMS`, roi
   cong bo release.
 - Workflow theo lich chay moi Thu Hai luc 02:00 UTC, kiem tra phien ban cac
@@ -260,11 +317,18 @@ Chi tiet trien khai va hosting static duoc mo ta trong
 |-- .github/
 |   `-- workflows/          Workflow CI, phat hanh, va component-watch
 |-- cloudflare/             Nguon Worker, script build, tai lieu trien khai
-|-- tests/                  Bo test Pester
+|-- src/                    .NET 10 manager solution
+|   |-- Sedg.Desktop/       WinForms management surface
+|   |-- Sedg.Broker/        Broker nang quyen va pipe protocol host
+|   `-- Sedg.Protocol/      Schema request/response dung chung
+|-- tests/                  Pester va .NET test suites
+|   |-- Sedg.UnitTests/     .NET unit harness khong dependency
 |   |-- Installer.Logic.Tests.ps1
-|   `-- Installer.Maintain.Tests.ps1
+|   |-- Installer.Maintain.Tests.ps1
+|   `-- integration/        Elevated smoke (Invoke-Smoke.ps1, Build-Fixtures.ps1)
 |-- tools/
-|   `-- Update-Manifest.ps1 Tao lai approved-releases.json
+|   |-- Update-Manifest.ps1 Tao lai approved-releases.json va embedded pins
+|   `-- Publish-Manager.ps1 Publish manager win-x64
 |-- approved-releases.json  Phien ban thanh phan da ghim va URL manifest
 |-- installer.ps1           Logic cai dat, menu, dich vu, va watchdog
 |-- package.json            Script build, trien khai, va test

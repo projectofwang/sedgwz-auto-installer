@@ -1,6 +1,6 @@
-# Function contracts — installer.ps1 (~3710 dòng, post R1–R10 + F1–F10)
+# Function contracts — installer.ps1 (4.717 dòng, post Tasks 1–7)
 
-Gộp từ 5 lanes (số dòng grep-verify 2026-10-11). File này là source of truth cho function contracts (thay thế INSTALLER_MAP/FLOW_TRACES đã xóa). Quy ước: pre→post/throw | invariant | edge.
+Gộp từ 5 lanes (số dòng grep-verify 2026-10-11; cập nhật tổng dòng 2026-10-23). File này là source of truth cho function contracts (thay thế INSTALLER_MAP/FLOW_TRACES đã xóa). Quy ước: pre→post/throw | invariant | edge. Các range A–E là anchor lịch sử; function mới của delivery nằm ở §F.
 
 ## A. Bootstrap/i18n/UI/preflight/manifest (~1–802)
 
@@ -64,3 +64,21 @@ Gộp từ 5 lanes (số dòng grep-verify 2026-10-11). File này là source of 
 - CDN (3366-3504): never-throw ra ngoài; retry 1/lớp; cache IP + sleep 200ms; opt-in 2 luồng (flag / Menu prompt).
 - Summary/Menu (3505-3665): elevate 1 lần/session; loop try/catch từng action + release mutex/transcript giữa actions; panel best-effort drop-row.
 - Dispatcher (3667-3710): Clear-StaleTempInstallers trong try (R9); default throw; finally restore prefs; pause nếu ≠Menu; self-delete chỉ match TEMP pattern; Exit-Installer nếu ExitCode≠0.
+
+## F. Desktop-manager delivery functions (Tasks 1–6; grep-verify 2026-10-23)
+
+Các hàm mới so với base `a834a44`; số dòng hiện tại của `installer.ps1` là **4.717**. Manager pin: repository `projectofwang/sedgwz-auto-installer`, tag `v1.2.1`, asset `sedg-manager-win-x64-1.2.1.zip`, SHA-256 `547599...ff065`, app path `%ProgramFiles%\SEDG Manager`.
+
+- `Get-PinnedManagerSource` (1839): đọc manager pin từ manifest/embedded theo cùng validate path; trả source cho staging; không nhận hash từ app.
+- `Install-StageManager` (1885): tải pinned zip vào staging admin-only → `Verify-Sha256` trước khi extract/write; fail → không chạm app path; `-AllowSeam` chỉ theo seam hiện có.
+- `Test-ManagerHealthy` (2169): kiểm tra live `Sedg.Desktop`/`Sedg.Broker`/layout sau commit; pure-read, không kill app.
+- `Install-CommitManager` (2185): guard `Sedg.Desktop` đang chạy (refuse, không kill/restart) → copy + ACL → verify; rollback `$hadOld`/`$moved` cho first-install và replace; fail → khôi phục manager cũ.
+- `Write-ProtocolLine` (4247): ghi một JSON line ra stdout/pipe; dùng cho protocol mode.
+- `New-ProtocolProbe` (4254): tạo probe object (`state/value/reason`) theo schema.
+- `New-ProtocolResult` (4265): tạo result envelope (`ok/code/message/data/currentState/restoredState/nextStep`).
+- `Get-StatusSnapshot` (4280): snapshot status read-only cho protocol; không mutate.
+- `Test-ProtocolServers` (4482): validate danh sách server cho protocol action; reject ngoài shape.
+- `Invoke-ProtocolAction` (4493): dispatch allow-list action; không tự elevate; lỗi → result envelope, không throw ra loop.
+- `Invoke-ProtocolLoop` (4601): đọc request JSON theo dòng từ stdin → dispatch → ghi result; exit semantics cho broker/host.
+
+Các function manager nằm trong vùng stage/commit (C/D); protocol nằm cuối file (F) và không thay đổi dispatcher `-Action` hiện có.
