@@ -11,7 +11,7 @@ Desktop Manager .NET 10 là management surface chính trên Windows 11 x64: `Sed
 - `Sedg.Protocol`: request/response schema dùng chung cho app và broker.
 - `installer.ps1 -Action <X>` (mặc định `Menu`): `Install-All/Update-All/Status/Restart/Uninstall -Purge/Show-Menu`; chạy trực tiếp hoặc `irm https://dl.../installer.ps1 | iex`.
 - `Gateway-Manager.bat` (trong engine folder): console menu cũ; one-release-cycle rollback path khi GUI không dùng được.
-- `approved-releases.json`: source of truth pin version + sha256 (installer v1.2.2, dnsproxy v0.86.0, zapret v72.13, nssm 2.24, manager v1.2.2).
+- `approved-releases.json`: source of truth pin version + sha256 (installer v1.2.3, dnsproxy v0.86.0, zapret v72.13, nssm 2.24, manager v1.2.3).
 - `tools/Update-Manifest.ps1`: dev-time bump manifest + sync embedded fallback (gồm manager).
 - `tools/Publish-Manager.ps1`: publish `Sedg.Desktop` + `Sedg.Broker` cho `win-x64` (self-contained hoặc framework-dependent).
 - `Invoke-Pester ./tests` / `npm test`; `dotnet run --project tests/Sedg.UnitTests -c Release`.

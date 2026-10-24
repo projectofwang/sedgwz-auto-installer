@@ -85,7 +85,7 @@ bundled), per Gate 1 decision O-6. `tools/Publish-Manager.ps1
 -FrameworkDependent` is a development option only.
 
 > **Manager release status:** the manager is pinned in
-> `approved-releases.json` as `sedg-manager-win-x64-1.2.2.zip`. The exact pinned
+> `approved-releases.json` as `sedg-manager-win-x64-1.2.3.zip`. The exact pinned
 > asset must be uploaded to the GitHub release before a fresh install can stage
 > it; until then the engine fails closed at the manager stage. The desktop
 > manager is implemented but not integration-accepted: elevated UAC, broker,

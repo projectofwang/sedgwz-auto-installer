@@ -103,7 +103,7 @@ function Test-Administrator {
 # set (optional, for tests and packaging - nothing requires them). The seams
 # are ignored when elevated unless -AllowSeam is passed.
 
-$script:InstallerVersion = '1.2.2'
+$script:InstallerVersion = '1.2.3'
 if ((-not [string]::IsNullOrWhiteSpace($env:SEDG_INSTALL_PATH)) -and ($AllowSeam -or (-not (Test-Administrator)))) {
     Write-Warning 'SEDG_INSTALL_PATH test seam is active; install layout leaves the default.'
     $script:InstallPath = $env:SEDG_INSTALL_PATH
@@ -157,9 +157,9 @@ $script:Sources = @{
 $script:NssmVersion = '2.24'
 $script:NssmSha256 = '727d1e42275c605e0f04aba98095c38a8e1e46def453cdffce42869428aa6743'
 $script:ManagerRepository = 'projectofwang/sedgwz-auto-installer'
-$script:ManagerTag = 'v1.2.2'
-$script:ManagerAsset = 'sedg-manager-win-x64-1.2.2.zip'
-$script:ManagerSha256 = 'd9f9dfb6ab2009c09540bd5124ca3e7535d6a177f6659fb17b22b8f6cdaacac4'
+$script:ManagerTag = 'v1.2.3'
+$script:ManagerAsset = 'sedg-manager-win-x64-1.2.3.zip'
+$script:ManagerSha256 = 'c53c0f53ae234b903be4048892e9ae207c3c7edb0d137b04da2e233f019f3682'
 $script:LangDir = Join-Path $env:APPDATA 'serverless-edge-dns-gateway'
 $script:LangFile = Join-Path $script:LangDir 'lang.txt'
 
@@ -781,9 +781,9 @@ function Get-ApprovedManifest {
             }
             manager = [pscustomobject]@{
                 repository = 'projectofwang/sedgwz-auto-installer'
-                tag = 'v1.2.2'
-                asset = 'sedg-manager-win-x64-1.2.2.zip'
-                sha256 = 'd9f9dfb6ab2009c09540bd5124ca3e7535d6a177f6659fb17b22b8f6cdaacac4'
+                tag = 'v1.2.3'
+                asset = 'sedg-manager-win-x64-1.2.3.zip'
+                sha256 = 'c53c0f53ae234b903be4048892e9ae207c3c7edb0d137b04da2e233f019f3682'
             }
             nssm = [pscustomobject]@{
                 version = $script:NssmVersion
@@ -4611,6 +4611,9 @@ function Invoke-ProtocolLoop {
         return
     }
 
+    # A UTF-8 BOM is not JSON: Windows PowerShell pipe writers emit one on a
+    # UTF-8 ANSI code page. Absorb it the same way the app absorbs ours.
+    $line = $line.TrimStart([char]0xFEFF)
     $request = $null
     try { $request = $line | ConvertFrom-Json -ErrorAction Stop }
     catch {

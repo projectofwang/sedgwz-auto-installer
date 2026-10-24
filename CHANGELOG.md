@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.2.3] - 2026-10-24
+
+- Fix protocol startup on hosts whose ANSI code page is 65001: a UTF-8 BOM
+  from pipe-based stdin is now absorbed before JSON parsing.
+- Bump InstallerVersion 1.2.2 -> 1.2.3 and pin SEDG Manager
+  `sedg-manager-win-x64-1.2.3.zip` (self-contained `win-x64`).
+- No engine behavior change.
+
 ## [1.2.2] - 2026-10-24
 
 - Bump InstallerVersion 1.2.1 -> 1.2.2 and pin SEDG Manager

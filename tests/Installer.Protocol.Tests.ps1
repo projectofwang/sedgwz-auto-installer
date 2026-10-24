@@ -23,6 +23,7 @@ function global:Invoke-EngineProcess {
     param(
         [Parameter(Mandatory = $true)][string]$Arguments,
         [string]$InputText = '',
+        [byte[]]$InputBytes = $null,
         [int]$TimeoutMs = 45000,
         [string]$InstallPath = '',
         [hashtable]$Environment = @{}
@@ -48,7 +49,10 @@ function global:Invoke-EngineProcess {
     try {
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
-        if (-not [string]::IsNullOrEmpty($InputText)) {
+        if ($null -ne $InputBytes) {
+            $process.StandardInput.BaseStream.Write($InputBytes, 0, $InputBytes.Length)
+            $process.StandardInput.BaseStream.Flush()
+        } elseif (-not [string]::IsNullOrEmpty($InputText)) {
             $process.StandardInput.WriteLine($InputText)
         }
         $process.StandardInput.Close()
@@ -70,13 +74,23 @@ function global:Invoke-EngineProtocol {
     param(
         [Parameter(Mandatory = $true)][string]$RequestJson,
         [switch]$AllowSeam,
+        [switch]$Utf8Bom,
         [string]$InstallPath = '',
         [int]$TimeoutMs = 45000,
         [hashtable]$Environment = @{}
     )
     $arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $global:SEDGProtocolInstallerPath + '" -Protocol jsonl'
     if ($AllowSeam) { $arguments += ' -AllowSeam' }
-    return Invoke-EngineProcess -Arguments $arguments -InputText $RequestJson -TimeoutMs $TimeoutMs -InstallPath $InstallPath -Environment $Environment
+    $inputBytes = $null
+    if ($Utf8Bom) {
+        # Force the child to decode stdin as UTF-8 regardless of host ACP, then
+        # send the BOM a Windows PowerShell pipe writer emits on a UTF-8 code page.
+        $invocation = '& ''' + $global:SEDGProtocolInstallerPath + ''' -Protocol jsonl'
+        if ($AllowSeam) { $invocation += ' -AllowSeam' }
+        $arguments = '-NoProfile -ExecutionPolicy Bypass -Command "[Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false); ' + $invocation + '"'
+        $inputBytes = [System.Text.Encoding]::UTF8.GetBytes([string][char]0xFEFF + $RequestJson + "`r`n")
+    }
+    return Invoke-EngineProcess -Arguments $arguments -InputText $RequestJson -InputBytes $inputBytes -TimeoutMs $TimeoutMs -InstallPath $InstallPath -Environment $Environment
 }
 
 function global:Convert-ProtocolOutput {
@@ -166,6 +180,16 @@ Describe 'installer.ps1 protocol surface (Task 1)' {
         $parsed.Results[0].ok | Should -BeTrue
         $parsed.Results[0].code | Should -Be 'None'
         @($parsed.Lines | Where-Object { $_ -notmatch '^\{' }).Count | Should -Be 0
+    }
+
+    It 'accepts a UTF-8 BOM ahead of the request line' {
+        # Regression: Windows PowerShell pipe writers emit a UTF-8 BOM when the
+        # ANSI code page is 65001, which made the engine reject every request.
+        $run = Invoke-EngineProtocol -RequestJson (New-ProtocolRequest -Action 'Status') -Utf8Bom
+        $parsed = Convert-ProtocolOutput -StdOut $run.StdOut
+        $run.ExitCode | Should -Be 0
+        $parsed.Results.Count | Should -Be 1
+        $parsed.Results[0].ok | Should -BeTrue
     }
 
     It 'returns all eight status probes with valid discriminants' {
