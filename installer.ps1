@@ -29,6 +29,9 @@ $script:ProtocolResultSent = $false
 $script:ProtocolMode = $false
 $script:CdnStructured = $false
 if ($Protocol -eq 'jsonl') {
+    # The protocol wire format is UTF-8. A host console on an OEM code page
+    # would decode a BOM or non-ASCII argument into garbage before parsing.
+    try { [Console]::InputEncoding = [Text.UTF8Encoding]::new($false) } catch { }
     $script:ProtocolOut = [Console]::Out
     try {
         Add-Type -TypeDefinition @'
@@ -103,7 +106,7 @@ function Test-Administrator {
 # set (optional, for tests and packaging - nothing requires them). The seams
 # are ignored when elevated unless -AllowSeam is passed.
 
-$script:InstallerVersion = '1.2.3'
+$script:InstallerVersion = '1.2.4'
 if ((-not [string]::IsNullOrWhiteSpace($env:SEDG_INSTALL_PATH)) -and ($AllowSeam -or (-not (Test-Administrator)))) {
     Write-Warning 'SEDG_INSTALL_PATH test seam is active; install layout leaves the default.'
     $script:InstallPath = $env:SEDG_INSTALL_PATH
@@ -157,9 +160,9 @@ $script:Sources = @{
 $script:NssmVersion = '2.24'
 $script:NssmSha256 = '727d1e42275c605e0f04aba98095c38a8e1e46def453cdffce42869428aa6743'
 $script:ManagerRepository = 'projectofwang/sedgwz-auto-installer'
-$script:ManagerTag = 'v1.2.3'
-$script:ManagerAsset = 'sedg-manager-win-x64-1.2.3.zip'
-$script:ManagerSha256 = 'c53c0f53ae234b903be4048892e9ae207c3c7edb0d137b04da2e233f019f3682'
+$script:ManagerTag = 'v1.2.4'
+$script:ManagerAsset = 'sedg-manager-win-x64-1.2.4.zip'
+$script:ManagerSha256 = '2f3b495faf36432e7030cc0ff8e094aacb00a6fcfb56775bd377af193ed5a163'
 $script:LangDir = Join-Path $env:APPDATA 'serverless-edge-dns-gateway'
 $script:LangFile = Join-Path $script:LangDir 'lang.txt'
 
@@ -781,9 +784,9 @@ function Get-ApprovedManifest {
             }
             manager = [pscustomobject]@{
                 repository = 'projectofwang/sedgwz-auto-installer'
-                tag = 'v1.2.3'
-                asset = 'sedg-manager-win-x64-1.2.3.zip'
-                sha256 = 'c53c0f53ae234b903be4048892e9ae207c3c7edb0d137b04da2e233f019f3682'
+                tag = 'v1.2.4'
+                asset = 'sedg-manager-win-x64-1.2.4.zip'
+                sha256 = '2f3b495faf36432e7030cc0ff8e094aacb00a6fcfb56775bd377af193ed5a163'
             }
             nssm = [pscustomobject]@{
                 version = $script:NssmVersion

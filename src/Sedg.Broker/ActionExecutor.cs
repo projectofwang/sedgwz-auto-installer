@@ -56,6 +56,8 @@ public sealed class ActionExecutor
                 RedirectStandardError = true,
                 CreateNoWindow = true,
                 WorkingDirectory = Path.GetDirectoryName(_enginePath) ?? string.Empty,
+                // The engine reads UTF-8; do not let the console code page add a BOM.
+                StandardInputEncoding = new UTF8Encoding(false),
             };
             startInfo.ArgumentList.Add("-NoProfile");
             startInfo.ArgumentList.Add("-ExecutionPolicy");

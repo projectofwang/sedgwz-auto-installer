@@ -2,13 +2,20 @@
 
 ## [Unreleased]
 
+## [1.2.4] - 2026-10-24
+
+- Decode protocol stdin as UTF-8 in `-Protocol jsonl`, so the engine no longer
+  rejects every request when the host console uses an OEM code page (the CI
+  runner decodes the pipe as IBM437). The existing BOM strip stays.
+- Write protocol stdin as UTF-8 without BOM from the Desktop Manager and broker.
+- Bump InstallerVersion 1.2.3 -> 1.2.4 and pin SEDG Manager
+  `sedg-manager-win-x64-1.2.4.zip` (self-contained `win-x64`).
+- Supersedes v1.2.3, which was tagged but never released: stripping the BOM
+  alone did not cover an OEM-code-page decoder.
+
 ## [1.2.3] - 2026-10-24
 
-- Fix protocol startup on hosts whose ANSI code page is 65001: a UTF-8 BOM
-  from pipe-based stdin is now absorbed before JSON parsing.
-- Bump InstallerVersion 1.2.2 -> 1.2.3 and pin SEDG Manager
-  `sedg-manager-win-x64-1.2.3.zip` (self-contained `win-x64`).
-- No engine behavior change.
+- Tagged, not released; superseded by 1.2.4.
 
 ## [1.2.2] - 2026-10-24
 

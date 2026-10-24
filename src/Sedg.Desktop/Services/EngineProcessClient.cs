@@ -94,6 +94,8 @@ public sealed class EngineProcessClient : IEngineClient
             WorkingDirectory = Path.GetDirectoryName(enginePath) ?? string.Empty,
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8,
+            // The engine reads UTF-8; do not let the console code page add a BOM.
+            StandardInputEncoding = new UTF8Encoding(false),
         };
         foreach (var argument in new[]
                  {

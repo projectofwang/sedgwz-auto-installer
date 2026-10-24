@@ -83,11 +83,9 @@ function global:Invoke-EngineProtocol {
     if ($AllowSeam) { $arguments += ' -AllowSeam' }
     $inputBytes = $null
     if ($Utf8Bom) {
-        # Force the child to decode stdin as UTF-8 regardless of host ACP, then
-        # send the BOM a Windows PowerShell pipe writer emits on a UTF-8 code page.
-        $invocation = '& ''' + $global:SEDGProtocolInstallerPath + ''' -Protocol jsonl'
-        if ($AllowSeam) { $invocation += ' -AllowSeam' }
-        $arguments = '-NoProfile -ExecutionPolicy Bypass -Command "[Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false); ' + $invocation + '"'
+        # Send the BOM a Windows PowerShell pipe writer emits on a UTF-8 code
+        # page, through the normal -File path so the engine's own decoding is
+        # under test.
         $inputBytes = [System.Text.Encoding]::UTF8.GetBytes([string][char]0xFEFF + $RequestJson + "`r`n")
     }
     return Invoke-EngineProcess -Arguments $arguments -InputText $RequestJson -InputBytes $inputBytes -TimeoutMs $TimeoutMs -InstallPath $InstallPath -Environment $Environment
