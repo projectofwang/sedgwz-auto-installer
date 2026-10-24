@@ -42,13 +42,13 @@
         <Grid>
             <views:DashboardView
                 DataContext="{Binding Dashboard}"
-                Visibility="{Binding IsActiveDashboard, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVis}}" />
+                Visibility="{Binding DataContext.IsActiveDashboard, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVis}}" />
             <views:OperationView
                 DataContext="{Binding Operation}"
-                Visibility="{Binding IsActiveOperation, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVis}}" />
+                Visibility="{Binding DataContext.IsActiveOperation, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVis}}" />
             <views:SettingsView
                 DataContext="{Binding Settings}"
-                Visibility="{Binding IsActiveSettings, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVis}}" />
+                Visibility="{Binding DataContext.IsActiveSettings, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVis}}" />
         </Grid>
     </DockPanel>
 </Window>
