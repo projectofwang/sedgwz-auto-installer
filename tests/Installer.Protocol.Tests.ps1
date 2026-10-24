@@ -108,19 +108,22 @@ function global:New-ProtocolRequest {
     } | ConvertTo-Json -Compress -Depth 6)
 }
 
-function global:Get-AdapterDnsSnapshot {
-    # Comparable snapshot of every adapter DNS assignment on this host.
-    try {
-        $rows = @(Get-DnsClientServerAddress -ErrorAction Stop | ForEach-Object {
-            '{0}|{1}|{2}' -f $_.InterfaceAlias, $_.AddressFamily, (@($_.ServerAddresses) -join ',')
-        } | Sort-Object)
-        return ($rows -join "`n")
-    } catch {
-        return ''
-    }
-}
-
 Describe 'installer.ps1 protocol surface (Task 1)' {
+    # Defined in BeforeAll, not at file scope: Installer.Maintain.Tests.ps1
+    # imports and later removes this shared name, and this file runs last.
+    BeforeAll {
+        function global:Get-AdapterDnsSnapshot {
+            # Comparable snapshot of every adapter DNS assignment on this host.
+            try {
+                $rows = @(Get-DnsClientServerAddress -ErrorAction Stop | ForEach-Object {
+                    '{0}|{1}|{2}' -f $_.InterfaceAlias, $_.AddressFamily, (@($_.ServerAddresses) -join ',')
+                } | Sort-Object)
+                return ($rows -join "`n")
+            } catch {
+                return ''
+            }
+        }
+    }
 
     It 'parses and remains pure ASCII' {
         $parseTokens = $null
